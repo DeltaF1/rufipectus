@@ -29,51 +29,43 @@ enum Value {
 
 // Here we go again...
 #[derive(Clone)]
-struct ObjectRef(DSTRefCell<ObjectRef, Value, Rc<DSTRefCellInner<ObjectRef, Value>>>);
+struct ObjectRef(Rc<DSTRefCellInner<ObjectRef, Value>>);
 
 type DSTRefCellInner<Header, SliceType> = 
     SliceWithHeader<(Header, RefCell<()>), std::cell::UnsafeCell<SliceType>>;
 
-struct DSTRefCell<Header, SliceType, Pointer: slice_dst::AllocSliceDst<DSTRefCellInner<Header, SliceType>>>
-(
-    Pointer//::<DSTRefCellInner<Header, SliceType>>
-    ,std::marker::PhantomData<(Header, SliceType)>
-);
-
-impl<H, S, A> DSTRefCell<H, S, A>
-        where A: slice_dst::AllocSliceDst<DSTRefCellInner<H, S>>,
-              A: std::ops::Deref<Target = DSTRefCellInner<H, S>>
-{
-    fn new<I>(sized: H, slice: I) -> A
-        where 
-              I: IntoIterator<Item=S>,
+impl ObjectRef {
+    fn new<I>(class: ObjectRef, slice: I) -> ObjectRef
+        where I: IntoIterator<Item=Value>,
               I::IntoIter: ExactSizeIterator,
         {
-        SliceWithHeader::new::<A, _>((sized, RefCell::new(())), slice.into_iter().map(|s: S| UnsafeCell::new(s))).into()
+            ObjectRef(
+        (SliceWithHeader::new::<Rc<DSTRefCellInner<ObjectRef, Value>>, _>((class, RefCell::new(())), slice.into_iter().map(|s: Value| UnsafeCell::new(s)))).into())
     }
 
-    fn borrow_header(&self) -> std::cell::Ref<H> {
+    // TODO: Return Ref<(ObjectRef, [Value])> instead
+    fn borrow_class(&self) -> std::cell::Ref<ObjectRef> {
         Ref::map(self.0.header.1.borrow(), |_| {
             // Safety: Can coerce this lifetime since `header.0` will never be accessed unless the
             // original RefCell is succesfully borrowed first
-            unsafe { &*(&self.0.header.0 as *const H) }
+            unsafe { &*(&self.0.header.0 as *const ObjectRef) }
         })
     }
 
-    fn borrow_slice(&self) -> std::cell::Ref<[S]> {
+    fn borrow_fields(&self) -> std::cell::Ref<[Value]> {
         Ref::map(self.0.header.1.borrow(), |_| {
             // SAFETY: self.slice will not be accessed unless by one of these methods that borrows
             // the refcell first
             // SAFETY: Idk if *[UnsafeCell<T>] -> *[T] is allowed or not
-            unsafe { &*(&self.0.slice as *const [UnsafeCell<S>] as *const [S]) }
+            unsafe { &*(&self.0.slice as *const [UnsafeCell<Value>] as *const [Value]) }
         })
     }
 
-    fn borrow_header_mut(&self) -> std::cell::RefMut<H> {
+    fn borrow_class_mut(&self) -> std::cell::RefMut<ObjectRef> {
         todo!()
     }
 
-    fn borrow_slice_mut(&self) -> std::cell::RefMut<[S]> {
+    fn borrow_fields_mut(&self) -> std::cell::RefMut<[Value]> {
         todo!()
     }
 }
