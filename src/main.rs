@@ -3,6 +3,8 @@ use std::cell::Cell;
 use std::collections::{HashMap, HashSet};
 
 mod bytecode;
+mod exact_iter;
+mod runtime;
 
 #[derive(Debug, Default)]
 struct InitializedOrderedSet<T> {
@@ -81,7 +83,22 @@ type Index = usize;
 enum Arity {
     Getter,
     Setter,
+    SubscriptGetter(usize),
+    SubscriptSetter(usize),
     Func(usize),
+}
+
+impl Arity {
+    pub fn arity(&self) -> usize {
+        use Arity::*;
+        match self {
+            Getter => 0,
+            Setter => 1,
+            SubscriptGetter(n) => *n,
+            SubscriptSetter(n) => *n + 1,
+            Func(n) => *n,
+        }
+    }
 }
 
 #[derive(PartialEq, Eq, Hash, Debug, Clone, Copy)]
@@ -90,10 +107,9 @@ struct Signature<'a> {
     arity: Arity,
 }
 
-impl std::fmt::Display for Signature<'_> {
+impl std::fmt::Display for Arity {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> Result<(), std::fmt::Error> {
-        write!(f, "{}", self.name);
-        match self.arity {
+        match *self {
             Arity::Getter => write!(f, ""),
             Arity::Setter => write!(f, "(_)"),
             Arity::Func(n) => {
@@ -106,7 +122,35 @@ impl std::fmt::Display for Signature<'_> {
                 }
                 write!(f, ")")
             }
+            Arity::SubscriptGetter(n) => {
+                write!(f, "[")?;
+                for _ in 1..n {
+                    write!(f, "_,")?;
+                }
+
+                if n > 0 {
+                    write!(f, "_")?;
+                }
+                write!(f, "]")
+            }
+            Arity::SubscriptSetter(n) => {
+                write!(f, "[")?;
+                for _ in 1..n {
+                    write!(f, "_,")?;
+                }
+
+                if n > 0 {
+                    write!(f, "_")?;
+                }
+                write!(f, "]=(_)")
+            }
         }
+    }
+}
+
+impl std::fmt::Display for Signature<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> Result<(), std::fmt::Error> {
+        write!(f, "{}{}", self.name, self.arity)
     }
 }
 
@@ -177,26 +221,32 @@ struct ClassDef<'a> {
 
 impl std::fmt::Debug for ClassDef<'_> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> Result<(), std::fmt::Error> {
-        let un_celled = self.methods.iter().map(|(k, v)| -> (&Signature, *const MethodAst) {(k, v.as_ptr())});
+        let un_celled = self
+            .methods
+            .iter()
+            .map(|(k, v)| -> (&Signature, *const MethodAst) { (k, v.as_ptr()) });
         f.debug_struct("ClassDef")
             .field("name", &self.name)
             .field("parent", &self.parent.map(|p| p.name))
             .field("fields", &self.fields)
             .field("static_fields", &self.static_fields)
-            .field("methods", &un_celled.map(|(k, v)| -> (&Signature, &MethodAst) {
-                // SAFETY: No &mut references will be made to this data before this function
-                // returns. In fact no &mut references *can* be made because we only have an
-                // immutable borrow for self/the Cell.
-                unsafe {
-                    (k, &*v)
-                }
-            }).collect::<HashMap<_, _>>())
+            .field(
+                "methods",
+                &un_celled
+                    .map(|(k, v)| -> (&Signature, &MethodAst) {
+                        // SAFETY: No &mut references will be made to this data before this function
+                        // returns. In fact no &mut references *can* be made because we only have an
+                        // immutable borrow for self/the Cell.
+                        unsafe { (k, &*v) }
+                    })
+                    .collect::<HashMap<_, _>>(),
+            )
             .finish()
     }
 }
 
 impl std::fmt::Debug for &MethodAst<'_> {
-fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> Result<(), std::fmt::Error> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> Result<(), std::fmt::Error> {
         write!(f, "Method: {:?}", self.ast)
     }
 }
@@ -383,7 +433,7 @@ enum Ast<'a> {
     GlobalLookup(usize),
     ArgLookup(usize),
     LocalLookup(usize),
-    Sequence(Vec<Ast<'a>>)
+    Sequence(Vec<Ast<'a>>),
 }
 
 #[derive(Debug)]
@@ -408,7 +458,9 @@ fn main() {
 
     Rectangle.add_method(Signature::getter("width"), |class| {
         dbg!(class.read_field("_width"));
-        MethodAst { ast: Ast::ReadField(class.read_field("_width"))}
+        MethodAst {
+            ast: Ast::ReadField(class.read_field("_width")),
+        }
     });
     /*
     // if existing, error with "duplicate method"
@@ -420,24 +472,28 @@ fn main() {
 
     Rectangle.add_method(Signature::getter("height"), |class| {
         dbg!(class.read_field("_height"));
-        MethodAst { ast: Ast::ReadField(class.read_field("_height"))}
-                     /*
-                     // if existing, error with "duplicate method"
-                     bytecode.emit(
-                         ByteCode::LoadThis(Rectangle.field("_height"))
-                     );
-                     bytecode.finish_function();
-                     */
+        MethodAst {
+            ast: Ast::ReadField(class.read_field("_height")),
+        }
+        /*
+        // if existing, error with "duplicate method"
+        bytecode.emit(
+            ByteCode::LoadThis(Rectangle.field("_height"))
+        );
+        bytecode.finish_function();
+        */
     });
 
     // TODO: add_constructor
     Rectangle.add_method(Signature::func("new", 2), |class| {
         dbg!(class.write_field("_width"));
         dbg!(class.write_field("_height"));
-        MethodAst { ast: Ast::Sequence(vec![
-            Ast::WriteField(class.write_field("_width")),
-            Ast::WriteField(class.write_field("_height"))
-        ]) }
+        MethodAst {
+            ast: Ast::Sequence(vec![
+                Ast::WriteField(class.write_field("_width")),
+                Ast::WriteField(class.write_field("_height")),
+            ]),
+        }
     });
     /*
     // wrapper for
@@ -508,7 +564,12 @@ fn main() {
         } else {
             panic!("Can't call super here: no such method {sig} in parent");
         }
-        MethodAst { ast: Ast::SuperCall(AstSig::Func("new".into(), vec![Ast::ArgLookup(0), Ast::ArgLookup(0)])) }
+        MethodAst {
+            ast: Ast::SuperCall(AstSig::Func(
+                "new".into(),
+                vec![Ast::ArgLookup(0), Ast::ArgLookup(0)],
+            )),
+        }
     });
     /*
     bytecode.finish_function();
@@ -543,6 +604,10 @@ fn main() {
                 // Can't CallAddress here because the method might be re-defined by a subclass
                 // We can actually determine that statically but it requires a second-pass or some really
                 // messy fixups
+                // TODO: Keep track of whether a super-classes method was redefined by some further
+                // subclass. If a method M for class A is the last version of M (i.e. there are no
+                // subclasses of A that define M) then any call to M for an object that is known
+                // at compile-time to be of type A can have the method's location compiled in.
                 bytecode.emit(ByteCode::CallDynamic(word));
             } else {
                 todo!("Recurse the lexical stack looking for locals")
