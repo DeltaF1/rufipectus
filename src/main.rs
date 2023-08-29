@@ -630,3 +630,56 @@ fn main() {
     // -> next stages
     // return (vec![Rectangle, Square], top_level_ast)
 }
+
+// TODO:
+//
+// Store all methods in inheritance tree as a list, then can search backwards to find the most
+// recent implementation of a method. each class object points into its location in this list
+//
+// class A {
+//  foo
+// }
+//
+// class B is A {
+//  bar
+// }
+//
+// class C is B {
+//  foo
+//  baz
+// }
+//
+// class D is B {
+//  bang
+// }
+//
+// class E is D {
+//  baz
+//  foo
+//  bar
+// }
+//
+// A -> B -> C
+//       \-> D -> E
+//
+//         END
+//      +-------+
+//      |  foo  |
+// A -->+-------+
+//      |  bar  |
+// B -->+-------+<--
+//      |  foo  |  |
+//      +-------+  |
+//      |  baz  |  |  D doesn't inherit from C, so skip over
+// C -->+-------+  |  it to get to D's superclass
+//      +-------+--+
+//      | bang  |
+// D -->+-------+
+//      |  baz  |
+//      +-------+
+//      |  foo  |
+//      +-------+
+//      |  bar  |
+// E -->+-------+
+//
+// To search, start at the pointer for the class then scan upwards for the matching signature
