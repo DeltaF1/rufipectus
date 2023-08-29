@@ -5,6 +5,8 @@ use std::collections::{HashMap, HashSet};
 mod bytecode;
 mod runtime;
 
+type CodeAddress = u32;
+
 #[derive(Debug, Default)]
 struct InitializedOrderedSet<T> {
     items: Vec<T>,
@@ -76,10 +78,8 @@ enum Type {
     Range,
 }
 
-type Index = usize;
-
 #[derive(PartialEq, Eq, Hash, Debug, Clone, Copy)]
-enum Arity {
+pub enum Arity {
     Getter,
     Setter,
     SubscriptGetter(usize),

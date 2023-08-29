@@ -1,9 +1,12 @@
-use slice_dst::SliceWithHeader;
 use std::cell::Ref;
 use std::cell::RefCell;
 use std::cell::UnsafeCell;
 use std::collections::HashMap;
 use std::rc::Rc;
+
+use slice_dst::SliceWithHeader;
+
+use crate::CodeAddress;
 
 mod stack;
 

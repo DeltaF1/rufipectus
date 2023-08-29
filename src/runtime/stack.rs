@@ -1,9 +1,8 @@
 use crate::runtime::Value;
+use crate::CodeAddress;
 
-#[derive(Clone, Copy)]
-struct CodeAddress {}
-
-struct Stack {
+#[derive(Debug)]
+pub struct Stack {
     vec: Vec<Value>,
     frame_start: usize,
 }
