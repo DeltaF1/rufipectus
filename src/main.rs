@@ -18,17 +18,14 @@ where
     T: std::cmp::Eq + std::hash::Hash,
 {
     fn get_or_insert(&mut self, item: T) -> usize {
-        self.items
-            .iter()
-            .position(|o| o == &item)
-            .unwrap_or_else(|| {
-                self.items.push(item);
-                self.items.len() - 1
-            })
+        self.get_index(&item).unwrap_or_else(|| {
+            self.items.push(item);
+            self.items.len() - 1
+        })
     }
 
-    fn get_index(&self, item: T) -> Option<usize> {
-        self.items.iter().position(|o| o == &item)
+    pub fn get_index(&self, item: &T) -> Option<usize> {
+        self.items.iter().position(|o| o == item)
     }
 
     pub fn read_use(&mut self, item: T) -> usize {
@@ -37,7 +34,7 @@ where
 
     pub fn validate(self) -> Option<Vec<T>> {
         for item in &self.items {
-            if !self.written_items.contains(&item) {
+            if !self.written_items.contains(item) {
                 return None;
             }
         }
@@ -278,11 +275,10 @@ impl<'a> ClassDef<'a> {
     }
 
     pub fn get_field_index(&self, name: &str) -> Option<usize> {
-        if let Some(existing) = self.fields.iter().position(|f| f == &name) {
-            Some(existing + self.num_parent_fields())
-        } else {
-            None
-        }
+        self.fields
+            .iter()
+            .position(|f| f == &name)
+            .map(|existing| existing + self.num_parent_fields())
     }
 
     pub fn get_static_field_index(&self, name: &str) -> Option<usize> {
@@ -297,7 +293,7 @@ impl<'a> ClassDef<'a> {
             }
             next = cls.parent;
         }
-        return None;
+        None
     }
 
     /// Only used for debugging
@@ -337,7 +333,7 @@ impl<'a> ClassBuilder<'a> {
         if true
         /* config.WARNINGS */
         {
-            if let Some((parent, i)) = self.class.find_field_in_parents(name) {
+            if let Some((parent, _)) = self.class.find_field_in_parents(name) {
                 println!("WARNING: field {} has same name as superclass {}. Remember that subclasses cannot access superclass fields", name, parent.name)
             }
         }
@@ -367,6 +363,8 @@ impl<'a> ClassBuilder<'a> {
     where
         F: Fn(&mut Self) -> MethodAst<'a>,
     {
+        // This is necessary because the .get gets confused about the borrow otherwise
+        #[allow(clippy::map_entry)]
         if !self.class.methods.contains_key(&name) {
             let cell = f(self).into();
             self.class.methods.insert(name, cell);
@@ -384,11 +382,6 @@ impl<'a> ClassBuilder<'a> {
 
         class
     }
-}
-
-enum StaticVariable {
-    Exists(Index),
-    New(Index),
 }
 
 /*
@@ -445,9 +438,9 @@ enum AstSig<'a> {
 impl<'a> From<&'a AstSig<'_>> for Signature<'a> {
     fn from(other: &'a AstSig) -> Self {
         match other {
-            AstSig::Getter(s) => Signature::getter(&s),
-            AstSig::Setter(s, _) => Signature::setter(&s),
-            AstSig::Func(s, v) => Signature::func(&s, v.len()),
+            AstSig::Getter(s) => Signature::getter(s),
+            AstSig::Setter(s, _) => Signature::setter(s),
+            AstSig::Func(s, v) => Signature::func(s, v.len()),
         }
     }
 }
