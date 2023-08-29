@@ -1,5 +1,6 @@
 use crate::runtime::Value;
 use crate::CodeAddress;
+use std::error::Error;
 
 #[derive(Debug)]
 pub struct Stack {
@@ -8,9 +9,17 @@ pub struct Stack {
 }
 
 #[derive(Debug)]
-enum StackError {
+pub enum StackError {
     Underflow,
 }
+
+impl std::fmt::Display for StackError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> Result<(), std::fmt::Error> {
+        write!(f, "{:?}", self)
+    }
+}
+
+impl Error for StackError {}
 
 impl Stack {
     fn new() -> Self {
@@ -19,6 +28,7 @@ impl Stack {
             frame_start: 0,
         }
     }
+
     fn full_depth(&self) -> usize {
         self.vec.len()
     }
@@ -32,33 +42,43 @@ impl Stack {
         self.frame_start
     }
 
-    fn push(&mut self, value: Value) {
+    pub fn push(&mut self, value: Value) {
         self.vec.push(value)
     }
 
-    fn pop(&mut self) -> Result<Value, StackError> {
+    pub fn pop(&mut self) -> Result<Value, StackError> {
         if self.vec.len() < self.frame_start {
             panic!("Something is very wrong. The object stack has been lowered past the current frame in a previous step and went unnoticed.")
         }
 
         if self.vec.len() == self.frame_start {
-            return Err(StackError::Underflow);
+            Err(StackError::Underflow)
         } else {
-            Ok(self.vec.pop().expect("Stack.pop underflowed the underlying vec without underflowing the stack frame. {self:?}"))
+            Ok(self.vec.pop().unwrap_or_else(||panic!("Stack.pop underflowed the underlying vec without underflowing the stack frame. {self:?}")))
         }
     }
 
-    fn top(&self) -> &Value {
-        &self.vec[self.vec.len()]
+    pub fn top(&self) -> &Value {
+        self.peek_from_top(0)
+    }
+
+    pub fn peek_from_top(&self, n: usize) -> &Value {
+        &self.vec[self.vec.len() - (n + 1)]
+    }
+
+    pub fn peek_from_frame(&self, n: usize) -> &Value {
+        &self.vec[self.frame_start + n]
     }
 }
 
+#[derive(Debug)]
 struct Frame {
     stack_depth: usize,
     ip: CodeAddress,
-    this: Value,
+    this: Option<Value>,
 }
 
+#[derive(Debug)]
 struct CallStack {
     vec: Vec<Frame>,
 }
@@ -77,24 +97,25 @@ impl CallStack {
     }
 }
 
-struct ExecutionContext {
-    stack: Stack,
+#[derive(Debug)]
+pub struct ExecutionContext {
+    pub stack: Stack,
     call_stack: CallStack,
-    ip: CodeAddress,
-    this: Value,
+    pub ip: CodeAddress,
+    pub this: Option<Value>,
 }
 
 impl ExecutionContext {
-    fn new(ip: CodeAddress, this: Value) -> Self {
+    pub fn new(ip: CodeAddress) -> Self {
         ExecutionContext {
             stack: Stack::new(),
             call_stack: CallStack::new(),
-            this,
+            this: None,
             ip,
         }
     }
 
-    fn call(&mut self, n: usize, address: CodeAddress) {
+    pub fn call(&mut self, n: usize, address: CodeAddress) {
         // The top n elements on the stack are arguments
         // When returning from this call, the stack should be shortened to
         let stack: &mut Stack = &mut self.stack;
@@ -104,12 +125,11 @@ impl ExecutionContext {
             this: self.this.clone(),
         });
         stack.frame_start = stack.start_frame(n);
-
-        // ABI is arg0, arg1, .. argn, this
-        self.this = stack.pop().unwrap();
+        self.this = None;
+        self.ip = address;
     }
 
-    fn tail_call(&mut self, n: usize, address: CodeAddress) {
+    pub fn tail_call(&mut self, n: usize, address: CodeAddress) {
         // A, B, C, D, E, F
         //        ^
         //        |------- stack.frame_start
@@ -140,14 +160,12 @@ impl ExecutionContext {
             vec.truncate(stack.frame_start + n)
         }
 
-        // Normal calling ABI begins
-        self.this = stack.pop().unwrap();
-
         // Tailcall, don't preserve the previous IP
-        self.ip = address
+        self.this = None;
+        self.ip = address;
     }
 
-    fn ret(&mut self) {
+    pub fn ret(&mut self) {
         let frame = self
             .call_stack
             .pop()

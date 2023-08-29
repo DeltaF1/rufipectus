@@ -529,6 +529,12 @@ fn main() {
 
     // End of rectangle class declaration
     Rectangle.fixup(Fixup::ClassNumFields, Rectangle.num_fields());
+    // TODO: Generate runtime code to create the class object
+    // PushPrimitive("Rectangle")
+    // PushPrimitive(Rectangle.num_fields())
+    // Push ??? (Rectangle's methods)
+    // PushGlobal(xxx) // Class
+    //
 
     */
     let Rectangle = Rectangle.finish();
