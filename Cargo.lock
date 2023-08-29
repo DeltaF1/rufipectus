@@ -19,9 +19,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "exact_repeat"
+version = "0.1.0"
+
+[[package]]
 name = "rufipectus"
 version = "0.1.0"
 dependencies = [
+ "exact_repeat",
  "slice-dst",
 ]
 
