@@ -3,7 +3,6 @@ use std::cell::Cell;
 use std::collections::{HashMap, HashSet};
 
 mod bytecode;
-mod exact_iter;
 mod runtime;
 
 #[derive(Debug, Default)]

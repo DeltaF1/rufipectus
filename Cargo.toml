@@ -7,3 +7,4 @@ edition = "2021"
 
 [dependencies]
 slice-dst = "1.5.1"
+exact_repeat = { path = "../exact_repeat" }
