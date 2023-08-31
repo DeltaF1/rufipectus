@@ -92,7 +92,80 @@ pub enum Op {
     NativeCall(NativeCall),
 }
 
-struct Binary {}
+const fn opcode(op: &Op) -> u8 {
+    use Op::*;
+    match op {
+        Dup => 0,
+        Pop => 1,
+        Peek(_) => 2,
+        ReadField(_) => 3,
+        WriteField(_) => 4,
+        PushArg(_) => 5,
+        PushLocal(_) => 6,
+        PopIntoLocal(_) => 7,
+        PushGlobal(_) => 8,
+        PopIntoGlobal(_) => 9,
+        PushPrimitive(p) => match p {
+            Primitive::Null => 0x10,
+            Primitive::Number(_) => 0x11,
+            Primitive::Boolean(_) => 0x12,
+        },
+        PushThis => 0x18,
+        PopThis => 0x19,
+        Jump(_) => 0x1a,
+        JumpIf(_) => 0x1b,
+        CallDirect(_, _) => 0x1c,
+        CallNamed(_) => 0x1d,
+        Ret => 0x1e,
+        RetNull => 0x1f,
+        Yield => 0x20,
+        YieldNull => 0x21, // Are these necessary?
+        NativeCall(_) => 0x22,
+    }
+}
+
+impl Op {
+    fn len(&self) -> usize {
+        use Op::*;
+        match self {
+            PushPrimitive(_) => 9,
+            CallDirect(_, _) => 9,
+            Jump(_) => 5,
+            _ => 1,
+        }
+    }
+
+    const fn opcode(&self) -> u8 {
+        opcode(self)
+    }
+
+    fn serialize(&self, output: &mut Vec<u8>) {
+        use Op::*;
+        let len = output.len();
+        output.push(opcode(self));
+        match self {
+            PushPrimitive(prim) => match prim {
+                Primitive::Number(f) => output.extend_from_slice(&f.to_le_bytes()),
+                Primitive::Boolean(b) => output.extend_from_slice(&(*b as u32).to_le_bytes()),
+                Primitive::Null => output.extend_from_slice(&0u64.to_le_bytes()),
+            },
+            CallDirect(arity, address) => {
+                let arity: u32 = (*arity).try_into().unwrap();
+                output.extend_from_slice(&arity.to_le_bytes());
+                output.extend_from_slice(&address.to_le_bytes());
+            }
+            Jump(offset) => output.extend_from_slice(&offset.to_le_bytes()),
+            Yield | Pop | Ret => {}
+            x => todo!("Serialize {x:?}"),
+        }
+        assert_eq!(output.len(), len + self.len());
+    }
+}
+
+#[derive(Debug)]
+struct Binary {
+    bytes: Vec<u8>,
+}
 /*
 pub struct Binary {
     instructions: [u8],
@@ -184,10 +257,24 @@ impl<'text> AssemblerNode<'text> {
     }
 }
 
-#[derive(Debug)]
+#[derive(Hash, PartialEq, Debug, Clone)]
 enum Lookup<'a> {
     Absolute(Vec<&'a str>),
     Relative(Vec<&'a str>),
+}
+
+impl<'text> Lookup<'text> {
+    fn resolve(&self, base: &[&'text str]) -> Vec<&'text str> {
+        match self {
+            Lookup::Absolute(v) => v.clone(),
+            Lookup::Relative(v) => {
+                let mut v2 = vec![];
+                v2.extend_from_slice(base);
+                v2.extend_from_slice(&v);
+                v2
+            }
+        }
+    }
 }
 
 impl<'a> From<&'a str> for Lookup<'a> {
@@ -203,17 +290,17 @@ impl<'a> From<&'a str> for AssemblerAddress<'a> {
 }
 
 #[derive(Debug)]
-struct MissingLabels<'text> {
-    labels: Vec<&'text str>,
+struct MissingLabels {
+    labels: Vec<String>,
 }
 
-impl std::fmt::Display for MissingLabels<'_> {
+impl std::fmt::Display for MissingLabels {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> Result<(), std::fmt::Error> {
         todo!()
     }
 }
 
-impl std::error::Error for MissingLabels<'_> {}
+impl std::error::Error for MissingLabels {}
 
 #[derive(Debug)]
 enum FixupType {
@@ -226,7 +313,7 @@ enum FixupType {
 struct Fixup<'a> {
     location: usize,
     typ: FixupType,
-    key: Lookup<'a>,
+    key: Vec<&'a str>,
 }
 
 #[derive(Debug)]
@@ -328,20 +415,162 @@ impl<'text> Assembler<'text> {
     }
 
     fn generate(&mut self) -> Result<(), ()> {
-        let state: Assembly = todo!("Draw the rest of the owl");
+        let mut current_section = vec![];
+        let mut output = vec![];
+        let mut labels = HashMap::new();
+        let mut fixups = vec![];
+
+        fn generate_node<'text>(
+            node: &mut AssemblerNode<'text>,
+            current_section: &mut Vec<&'text str>,
+            output: &mut Vec<u8>,
+            labels: &mut HashMap<Vec<&'text str>, CodeAddress>,
+            fixups: &mut Vec<Fixup<'text>>,
+        ) {
+            match node {
+                AssemblerNode::Section(name, vec) => {
+                    current_section.push(name);
+                    if let Some(existing) = labels.insert(
+                        current_section.clone(),
+                        output
+                            .len()
+                            .try_into()
+                            .expect("Assembly overflowed CodeAddress"),
+                    ) {
+                        // TODO: ExistingLabel error
+                        panic!("Label {current_section:?} already points to address {existing}")
+                    }
+                    for inner in vec {
+                        generate_node(inner, current_section, output, labels, fixups)
+                    }
+                    current_section.pop();
+                }
+                AssemblerNode::Label(name) => {
+                    current_section.push(name);
+                    if let Some(existing) = labels.insert(
+                        current_section.clone(),
+                        output
+                            .len()
+                            .try_into()
+                            .expect("Assembly overflowed CodeAddress"),
+                    ) {
+                        // TODO: ExistingLabel error
+                        panic!("Label {current_section:?} already points to address {existing}")
+                    }
+                    current_section.pop();
+                }
+                AssemblerNode::Op(op) => {
+                    match op {
+                        AssemblerOp::StaticallyKnown(op) => {
+                            op.serialize(output);
+                        }
+                        AssemblerOp::Variable(v) => {
+                            match v {
+                                VariableOp::Jump(lookup) | VariableOp::JumpIf(lookup) => {
+                                    let offset: i32;
+                                    let absolute_key = lookup.resolve(current_section);
+                                    let target = labels.get(&absolute_key);
+                                    if let Some(shortcut) = target {
+                                        // The IP will have advanced past this opcode
+                                        // 1 byte + 4 bytes for the offset itself
+                                        let start: i32 = (output.len() + 5).try_into().unwrap();
+                                        let target: i32 = (*shortcut).try_into().unwrap();
+                                        offset = target - start;
+                                    } else {
+                                        // Placeholder value to fixup later
+                                        offset = 0;
+                                        fixups.push(Fixup {
+                                            key: absolute_key,
+                                            location: output.len() + 1, // Account for the Jump opcode
+                                            typ: FixupType::CodeOffset,
+                                        });
+                                    }
+
+                                    match v {
+                                        VariableOp::Jump(_) => Op::Jump(offset).serialize(output),
+                                        VariableOp::JumpIf(_) => {
+                                            Op::JumpIf(offset).serialize(output)
+                                        }
+                                        _ => unreachable!(),
+                                    }
+                                }
+                                VariableOp::CallDirect(arity, lookup) => {
+                                    let address: CodeAddress;
+                                    let absolute_key = lookup.resolve(current_section);
+                                    let target = labels.get(&absolute_key);
+                                    if let Some(shortcut) = target {
+                                        address = *shortcut;
+                                    } else {
+                                        // Placeholder to be fixed up later
+                                        address = 0;
+                                        fixups.push(Fixup {
+                                            key: absolute_key,
+                                            location: output.len() + 5, // Account for the Call opcode and the arity
+                                            typ: FixupType::CodeAddress,
+                                        });
+                                    }
+
+                                    Op::CallDirect(*arity, address).serialize(output);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // Avoid the awkward problem of the root's name being in the path
+        for node in self.root.get_vec_mut() {
+            generate_node(
+                node,
+                &mut current_section,
+                &mut output,
+                &mut labels,
+                &mut fixups,
+            );
+        }
+
+        fixups.retain(|fixup| {
+            let target = labels.get(&fixup.key);
+            if let Some(target) = target {
+                match &fixup.typ {
+                    FixupType::CodeAddress => {
+                        (&mut output[fixup.location..fixup.location + 4])
+                            .copy_from_slice(&target.to_le_bytes());
+                    }
+                    x => todo!("Fixup {x:?}"),
+                }
+                return false; // Delete this fixup as it is now resolved
+            } else {
+                return true; // This fixup can't be resolved
+            }
+        });
+
+        let state = Assembly {
+            generated: output,
+            labels,
+            fixups,
+        };
 
         if state.fixups.len() > 0 {
             self.state = IntermediateState::Sized(state)
         } else {
             self.state = IntermediateState::Complete(state)
         }
-
-        todo!()
+        Ok(())
     }
 
-    pub fn assemble(&mut self) -> Result<Binary, MissingLabels<'text>> {
+    pub fn assemble(&mut self) -> Result<Binary, MissingLabels> {
         self.get_or_generate();
-        todo!()
+        match &self.state {
+            IntermediateState::Sized(assembly) => Err(MissingLabels {
+                labels: assembly.fixups.iter().map(|f| f.key.join("/")).collect(),
+            }),
+            IntermediateState::Complete(assembly) => Ok(Binary {
+                bytes: assembly.generated.clone(),
+            }),
+            IntermediateState::Dirty => unreachable!(),
+        }
     }
 
     fn get_or_generate(&mut self) -> Result<&mut Assembly<'text>, ()> {
@@ -370,14 +599,28 @@ enum IntermediateState<'text> {
 
 #[derive(Debug, Default)]
 struct Assembly<'text> {
-    labels: HashMap<&'text [&'text str], CodeAddress>,
-    generated: Vec<u8>,
+    labels: HashMap<Vec<&'text str>, CodeAddress>,
     fixups: Vec<Fixup<'text>>,
+    generated: Vec<u8>,
 }
 
 #[test]
 fn test_assembler() {
     /*
+    Pseudo-code
+    fn first(a, b) {
+        return a
+    }
+
+    fn main() {
+        while true {
+            yield first(69, 420)
+        }
+    }
+    */
+
+    /*
+    Pseudo-assembler
     :start
        :loop
            push 69
@@ -394,6 +637,9 @@ fn test_assembler() {
     ;first
     */
 
+    /*
+     * Assembler API
+     */
     let mut asm = Assembler::new();
 
     asm.with_section("start", |mut asm| {
@@ -411,8 +657,8 @@ fn test_assembler() {
         asm.emit_op(Op::Ret);
     });
 
-    dbg!(&asm);
-    dbg!(asm.address_of_label(&["start"]));
-    dbg!(asm.address_of_label(&["start", "loop"]));
-    dbg!(asm.address_of_label(&["loop"]));
+    dbg!(asm.assemble());
+    assert_eq!(asm.address_of_label(&["start"]), Ok(0));
+    assert_eq!(asm.address_of_label(&["start", "loop"]), Ok(0));
+    assert_eq!(asm.address_of_label(&["first"]), Ok(33));
 }
