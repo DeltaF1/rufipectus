@@ -62,6 +62,7 @@ impl Stack {
         self.peek_from_top(0)
     }
 
+    // TODO: Error if below frame start?
     pub fn peek_from_top(&self, n: usize) -> &Value {
         &self.vec[self.vec.len() - (n + 1)]
     }

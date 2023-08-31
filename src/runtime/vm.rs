@@ -246,7 +246,8 @@ mod test {
             Op::Ret,
             /* Rectangle metaclass */
             /* new(_,_) */
-            /* [31] */ Op::PopThis,
+            /* [31] */
+            Op::PopThis,
             // Number of fields for instances of this class
             Op::ReadField(0),
             Op::PushThis,
@@ -276,7 +277,8 @@ mod test {
             Op::Ret,
             /* Square metaclass */
             /* new(_) */
-            /* [45] */ Op::PopThis,
+            /* [45] */
+            Op::PopThis,
             Op::ReadField(0),
             Op::PushThis,
             Op::NativeCall(NativeCall::NewObject),
