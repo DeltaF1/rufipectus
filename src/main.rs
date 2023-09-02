@@ -1,3 +1,4 @@
+#![deny(unsafe_op_in_unsafe_fn)]
 use std::borrow::Cow;
 use std::cell::Cell;
 use std::collections::{HashMap, HashSet};
