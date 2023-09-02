@@ -249,6 +249,13 @@ enum AssemblerNode<'a> {
 }
 
 impl<'text> AssemblerNode<'text> {
+    fn get_vec(&self) -> &Vec<AssemblerNode<'text>> {
+        match self {
+            AssemblerNode::Section(_, v) => v,
+            _ => panic!(),
+        }
+    }
+
     fn get_vec_mut(&mut self) -> &mut Vec<AssemblerNode<'text>> {
         match self {
             AssemblerNode::Section(_, v) => v,
@@ -317,14 +324,14 @@ struct Fixup<'a> {
 }
 
 #[derive(Debug)]
-struct Assembler<'text> {
+pub struct Assembler<'text> {
     root: AssemblerNode<'text>,
     current_path: Vec<&'text str>,
     state: IntermediateState<'text>,
 }
 
 impl<'text> Assembler<'text> {
-    fn new() -> Self {
+    pub fn new() -> Self {
         Assembler {
             root: AssemblerNode::Section("", vec![]),
             current_path: vec![],
@@ -332,31 +339,8 @@ impl<'text> Assembler<'text> {
         }
     }
 
-    fn find_section<'a, 'b>(&mut self, name: &'b [&'text str]) -> &'a mut AssemblerNode
-    where
-        'a: 'b,
-    {
-        todo!()
-    }
-
-    fn current_section<'a>(&'a mut self) -> &'a mut AssemblerNode<'text> {
-        let mut current = &mut self.root;
-
-        for name in &self.current_path {
-            let vec = current.get_vec_mut();
-            match vec.iter_mut().find(|node| {
-                if let AssemblerNode::Section(sec_name, _) = node {
-                    sec_name == name
-                } else {
-                    false
-                }
-            }) {
-                Some(node) => current = node,
-                none => panic!("Can't find the current section"),
-            }
-        }
-
-        current
+    fn current_section(&mut self) -> &mut AssemblerNode<'text> {
+        self.borrow_section_mut(Lookup::Absolute(self.current_path.clone()))
     }
 
     fn with_section<F>(&mut self, name: &'text str, mut f: F)
@@ -366,12 +350,7 @@ impl<'text> Assembler<'text> {
         let cur = self.current_section();
 
         let new_section = AssemblerNode::Section(name, vec![]);
-
-        if let AssemblerNode::Section(_, v) = cur {
-            v.push(new_section)
-        } else {
-            panic!()
-        }
+        cur.get_vec_mut().push(new_section);
 
         self.current_path.push(name);
 
@@ -381,12 +360,8 @@ impl<'text> Assembler<'text> {
     }
 
     fn emit_op(&mut self, op: Op) {
-        let section = self.current_section();
-        if let AssemblerNode::Section(name, vec) = section {
-            vec.push(AssemblerNode::Op(AssemblerOp::StaticallyKnown(op)));
-        } else {
-            panic!()
-        }
+        let section = self.current_section().get_vec_mut();
+        section.push(AssemblerNode::Op(AssemblerOp::StaticallyKnown(op)));
     }
 
     fn label(&mut self, name: &'text str) {
@@ -410,6 +385,7 @@ impl<'text> Assembler<'text> {
         section.push(VariableOp::Jump(lookup).into())
     }
 
+    // FIXME: dirty is never called
     fn dirty(&mut self) {
         self.state = IntermediateState::Dirty
     }
@@ -582,6 +558,50 @@ impl<'text> Assembler<'text> {
             IntermediateState::Sized(ref mut a) => a,
             IntermediateState::Complete(ref mut a) => a,
         })
+    }
+
+    // TODO: Return Result
+    fn borrow_section_mut(&mut self, path: Lookup<'text>) -> &mut AssemblerNode<'text> {
+        self.dirty();
+        let path = path.resolve(&self.current_path);
+        let mut current = &mut self.root;
+
+        for name in &path {
+            let vec = current.get_vec_mut();
+            match vec.iter_mut().find(|node| {
+                if let AssemblerNode::Section(sec_name, _) = node {
+                    sec_name == name
+                } else {
+                    false
+                }
+            }) {
+                Some(node) => current = node,
+                none => panic!("Can't find the current section"),
+            }
+        }
+
+        current
+    }
+
+    fn borrow_section(&self, path: Lookup<'text>) -> &AssemblerNode<'text> {
+        let path = path.resolve(&self.current_path);
+        let mut current = &self.root;
+
+        for name in &path {
+            let vec = current.get_vec();
+            match vec.iter().find(|node| {
+                if let AssemblerNode::Section(sec_name, _) = node {
+                    sec_name == name
+                } else {
+                    false
+                }
+            }) {
+                Some(node) => current = node,
+                none => panic!("Can't find the current section"),
+            }
+        }
+
+        current
     }
 
     fn address_of_label(&mut self, name: &[&str]) -> Result<CodeAddress, ()> {
