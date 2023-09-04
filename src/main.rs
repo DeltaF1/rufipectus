@@ -4,6 +4,8 @@ use std::cell::Cell;
 use std::collections::{HashMap, HashSet};
 
 mod bytecode;
+use bytecode::Assembler;
+
 mod runtime;
 
 type CodeAddress = u32;
@@ -12,6 +14,12 @@ type CodeAddress = u32;
 struct InitializedOrderedSet<T> {
     items: Vec<T>,
     written_items: HashSet<T>,
+}
+
+impl<T: Default> InitializedOrderedSet<T> {
+    fn new() -> Self {
+        Default::default()
+    }
 }
 
 impl<T> InitializedOrderedSet<T>
@@ -53,6 +61,7 @@ where
     }
 }
 
+#[derive(PartialEq, Debug, Clone)]
 enum Primitive {
     Bool(bool),
     Number(f64),
@@ -61,19 +70,158 @@ enum Primitive {
     Null,
 }
 
-enum Value<'a> {
+#[derive(Default, Debug, Clone)]
+enum Type<'a> {
+    #[default]
     Unknown,
-    KnownType(Type),
+    KnownType(BroadType),
     KnownPrimitive(Primitive),
-    KnownObject(&'a ClassBuilder<'a>),
+    KnownClassOrSubtype(&'a ClassDef<'a>),
+    KnownClass(&'a ClassDef<'a>), // Only possible to glean from constructors
 }
 
-enum Type {
+impl<'a> PartialEq for Type<'a> {
+    fn eq(&self, other: &Type<'a>) -> bool {
+        match (self, other) {
+            (Type::Unknown, Type::Unknown) => true,
+            (Type::KnownType(b1), Type::KnownType(b2)) => b1 == b2,
+            (Type::KnownPrimitive(p1), Type::KnownPrimitive(p2)) => p1 == p2,
+            (Type::KnownClassOrSubtype(c1), Type::KnownClassOrSubtype(c2)) => {
+                std::ptr::eq(c1 as *const _, c2 as *const _)
+            }
+            (Type::KnownClass(c1), Type::KnownClass(c2)) => {
+                std::ptr::eq(c1 as *const _, c2 as *const _)
+            }
+            _ => false,
+        }
+    }
+}
+
+impl Type<'_> {
+    fn discrim(&self) -> u8 {
+        match self {
+            Type::Unknown => 0,
+            Type::KnownType(_) => 1,
+            Type::KnownPrimitive(_) => 2,
+            Type::KnownClassOrSubtype(_) => 3,
+            Type::KnownClass(_) => 4,
+        }
+    }
+
+    fn truthiness(&self) -> Option<bool> {
+        match self {
+            Type::Unknown => None,
+            Type::KnownType(_) => Some(true),
+            Type::KnownPrimitive(p) => match p {
+                Primitive::Null => Some(false),
+                Primitive::Bool(b) => Some(*b),
+                _ => Some(true),
+            },
+            // TODO: Can classes override truthiness?
+            Type::KnownClassOrSubtype(_) => Some(true),
+            Type::KnownClass(_) => Some(true),
+        }
+    }
+}
+
+use std::ops::BitOr;
+impl<'text> BitOr<Type<'text>> for Type<'text> {
+    type Output = Type<'text>;
+
+    fn bitor(self, other: Type<'text>) -> <Self as BitOr<Type<'text>>>::Output {
+        if self == other {
+            return self;
+        }
+
+        let (a, b);
+        if self.discrim() < other.discrim() {
+            (a, b) = (self, other);
+        } else {
+            (a, b) = (other, self)
+        }
+
+        match (a, b) {
+            (Type::Unknown, _) => Type::Unknown,
+            (Type::KnownType(b1), Type::KnownType(b2)) => {
+                if b1 == b2 {
+                    Type::KnownType(b1)
+                } else {
+                    Type::Unknown
+                }
+            }
+            (Type::KnownType(BroadType::Object), Type::KnownClass(_)) => {
+                Type::KnownType(BroadType::Object)
+            }
+            (Type::KnownType(BroadType::Object), Type::KnownClassOrSubtype(_)) => {
+                Type::KnownType(BroadType::Object)
+            }
+            (Type::KnownType(BroadType::Object), Type::KnownPrimitive(_)) => Type::Unknown,
+            (Type::KnownType(_), Type::KnownPrimitive(Primitive::Null)) => Type::Unknown,
+            (Type::KnownType(b), Type::KnownPrimitive(p)) => {
+                if b == (&p).into() {
+                    Type::KnownType(b)
+                } else {
+                    Type::Unknown
+                }
+            }
+            (Type::KnownPrimitive(p1), Type::KnownPrimitive(p2)) => {
+                if p1 == p2 {
+                    Type::KnownPrimitive(p1)
+                } else if Into::<BroadType>::into(&p1) == (&p2).into() {
+                    Type::KnownType((&p1).into())
+                } else {
+                    Type::Unknown
+                }
+            }
+            (Type::KnownClassOrSubtype(c1), Type::KnownClass(c2))
+            | (Type::KnownClassOrSubtype(c1), Type::KnownClassOrSubtype(c2)) => {
+                if std::ptr::eq(c1, c2) {
+                    Type::KnownClassOrSubtype(c1)
+                } else if c2.is_subclass_of(c1) {
+                    Type::KnownClassOrSubtype(c1)
+                } else if c1.is_subclass_of(c2) {
+                    Type::KnownClassOrSubtype(c2)
+                } else {
+                    Type::Unknown
+                }
+            }
+            (Type::KnownClass(c1), Type::KnownClass(c2)) => {
+                if std::ptr::eq(c1, c2) {
+                    Type::KnownClass(c1)
+                } else if c2.is_subclass_of(c1) {
+                    Type::KnownClassOrSubtype(c1)
+                } else if c1.is_subclass_of(c2) {
+                    Type::KnownClassOrSubtype(c2)
+                } else {
+                    Type::Unknown
+                }
+            }
+            (Type::KnownType(_), _) => Type::Unknown,
+            (x, y) => panic!("Unforseen type combination ({x:?}, {y:?})"),
+        }
+    }
+}
+
+#[derive(PartialEq, Debug, Clone, Copy)]
+// TODO: Replace with runtime::GlobalClassSlots
+enum BroadType {
     Object,
     Bool,
     Number,
     String,
     Range,
+}
+
+impl From<&Primitive> for BroadType {
+    fn from(p: &Primitive) -> BroadType {
+        match p {
+            Primitive::Bool(_) => BroadType::Bool,
+            Primitive::String(_) => BroadType::String,
+            Primitive::Number(_) => BroadType::Number,
+            Primitive::Range(..) => BroadType::Range,
+            Primitive::Null => panic!(),
+        }
+    }
 }
 
 #[derive(PartialEq, Eq, Hash, Debug, Clone, Copy)]
@@ -204,7 +352,7 @@ struct ClassBuilder<'a> {
 }
 
 struct MethodAst<'a> {
-    ast: Ast<'a>,
+    ast: Statement<'a>,
 }
 
 #[derive(Default)]
@@ -256,6 +404,20 @@ impl<'a> ClassDef<'a> {
         }
     }
 
+    pub fn is_subclass_of(&self, other: &ClassDef<'a>) -> bool {
+        let mut current = self;
+
+        while let Some(ancestor) = current.parent {
+            if std::ptr::eq(ancestor, other) {
+                return true;
+            }
+
+            current = ancestor;
+        }
+
+        false
+    }
+
     pub fn child_of(&'a self, name: &'a str) -> ClassBuilder<'a> {
         ClassBuilder {
             class: ClassDef {
@@ -295,6 +457,15 @@ impl<'a> ClassDef<'a> {
             next = cls.parent;
         }
         None
+    }
+
+    fn find_class_with_method(&self, sig: &Signature<'a>) -> Option<&ClassDef<'a>> {
+        if self.methods.contains_key(sig) {
+            Some(self)
+        } else {
+            self.parent
+                .and_then(|parent| parent.find_class_with_method(sig))
+        }
     }
 
     /// Only used for debugging
@@ -415,25 +586,63 @@ impl<'a> ClassBuilder<'a> {
  s.hello
 */
 
+#[deprecated]
 #[derive(Debug)]
 enum Ast<'a> {
-    Call(Box<Ast<'a>>, AstSig<'a>),
+    Statement(Statement<'a>),
+    Expression(Expression<'a>),
+}
+
+// TODO: Expression statement
+#[derive(Debug)]
+enum Statement<'a> {
+    WriteField(usize, Box<Expression<'a>>),
+    AssignLocal(usize, Box<Expression<'a>>),
+    AssignGlobal(usize, Box<Expression<'a>>),
+    If(Box<Expression<'a>>, IfBody<'a>),
+    Block(Vec<Statement<'a>>),
+    Return(Expression<'a>),
+    ExprStatement(Expression<'a>),
+}
+
+#[derive(Debug)]
+enum Expression<'a> {
+    Call(Box<Expression<'a>>, AstSig<'a>),
     ThisCall(AstSig<'a>),
     SuperCall(AstSig<'a>),
     ReadField(usize),
-    WriteField(usize),
-    LoadStatic(usize),
+    ReadStatic(usize),
     GlobalLookup(usize),
     ArgLookup(usize),
     LocalLookup(usize),
-    Sequence(Vec<Ast<'a>>),
+    Ternary(
+        Box<Expression<'a>>,
+        Box<Expression<'a>>,
+        Box<Expression<'a>>,
+    ),
+    Primitive(Primitive),
+}
+
+#[derive(Debug)]
+enum IfBody<'a> {
+    ThenElse {
+        then: Box<Statement<'a>>,
+        r#else: Box<Statement<'a>>,
+    },
+    Then {
+        then: Box<Statement<'a>>,
+    },
+    ThenElseIf {
+        then: Box<Statement<'a>>,
+        elseif: (Box<Expression<'a>>, Box<IfBody<'a>>),
+    },
 }
 
 #[derive(Debug)]
 enum AstSig<'a> {
     Getter(Cow<'a, str>),
-    Setter(Cow<'a, str>, Box<Ast<'a>>),
-    Func(Cow<'a, str>, Vec<Ast<'a>>),
+    Setter(Cow<'a, str>, Box<Expression<'a>>),
+    Func(Cow<'a, str>, Vec<Expression<'a>>),
 }
 
 impl<'a> From<&'a AstSig<'_>> for Signature<'a> {
@@ -446,13 +655,40 @@ impl<'a> From<&'a AstSig<'_>> for Signature<'a> {
     }
 }
 
+#[derive(Default)]
+struct Scope<'text> {
+    names: Vec<&'text str>,
+}
+
+impl<'text> Scope<'text> {
+    fn new() -> Self {
+        Default::default()
+    }
+
+    fn declare(&mut self, name: &'text str) -> usize {
+        if self.names.contains(&name) {
+            panic!("Name {name} already exists in scope")
+        }
+        self.names.push(name);
+        self.names.len() - 1
+    }
+
+    fn get_index(&self, name: &'text str) -> Option<usize> {
+        self.names.iter().position(|n| n == &name)
+    }
+}
+
 fn main() {
+    let mut globals = Scope::new();
+    let mut classes: Vec<&ClassDef> = vec![];
     let mut Rectangle = ClassBuilder::new("Rectangle");
 
     Rectangle.add_method(Signature::getter("width"), |class| {
         dbg!(class.read_field("_width"));
         MethodAst {
-            ast: Ast::ReadField(class.read_field("_width")),
+            ast: Statement::Return(Expression::ReadField(
+                class.read_field("_width"),
+            )),
         }
     });
     /*
@@ -466,7 +702,9 @@ fn main() {
     Rectangle.add_method(Signature::getter("height"), |class| {
         dbg!(class.read_field("_height"));
         MethodAst {
-            ast: Ast::ReadField(class.read_field("_height")),
+            ast: Statement::Return(Expression::ReadField(
+                class.read_field("_height"),
+            )),
         }
         /*
         // if existing, error with "duplicate method"
@@ -478,13 +716,19 @@ fn main() {
     });
 
     // TODO: add_constructor
-    Rectangle.add_method(Signature::func("new", 2), |class| {
+    Rectangle.add_method(Signature::func("new init", 2), |class| {
         dbg!(class.write_field("_width"));
         dbg!(class.write_field("_height"));
         MethodAst {
-            ast: Ast::Sequence(vec![
-                Ast::WriteField(class.write_field("_width")),
-                Ast::WriteField(class.write_field("_height")),
+            ast: Statement::Block(vec![
+                Statement::WriteField(
+                    class.write_field("_width"),
+                    Box::new(Expression::ArgLookup(0)),
+                ),
+                Statement::WriteField(
+                    class.write_field("_height"),
+                    Box::new(Expression::ArgLookup(1)),
+                ),
             ]),
         }
     });
@@ -505,13 +749,13 @@ fn main() {
         dbg!(class.read_field("_height"));
 
         MethodAst {
-            ast: Ast::Call(
-                Box::new(Ast::ReadField(class.read_field("_width"))),
+            ast: Statement::Return(Expression::Call(
+                Box::new(Expression::ReadField(class.read_field("_width"))),
                 AstSig::Func(
                     "*".into(),
-                    vec![Ast::ReadField(class.read_field("_height"))],
+                    vec![Expression::ReadField(class.read_field("_height"))],
                 ),
-            ),
+            )),
         }
 
         /*
@@ -539,11 +783,13 @@ fn main() {
 
     */
     let Rectangle = Rectangle.finish();
+    classes.push(&Rectangle);
+    globals.declare("Rectangle");
     let mut Square = Rectangle.child_of("Square");
     // TODO: Creates a static method called "new" with auto-generated constructor code,
-    // and an instance method called "init new". The
+    // and an instance method called "new init". The
     // space makes it uncallable by normal code
-    Square.add_method(Signature::func("new", 0), |class| {
+    Square.add_method(Signature::func("new init", 0), |class| {
         /*
         bytecode.emit(ByteCode::PushConst("Square"));
         bytecode.emit(ByteCode::StoreStatic(Square.static_field("__classname")));
@@ -551,7 +797,7 @@ fn main() {
         bytecode.emit(ByteCode::LoadArg(0));
         */
         dbg!(class.write_static_field("__classname"));
-        let sig = Signature::func("new", 2);
+        let sig = Signature::func("new init", 2);
         if let Some(index) = class
             .class
             .parent
@@ -564,10 +810,10 @@ fn main() {
             panic!("Can't call super here: no such method {sig} in parent");
         }
         MethodAst {
-            ast: Ast::SuperCall(AstSig::Func(
+            ast: Statement::Return(Expression::SuperCall(AstSig::Func(
                 "new".into(),
-                vec![Ast::ArgLookup(0), Ast::ArgLookup(0)],
-            )),
+                vec![Expression::ArgLookup(0), Expression::ArgLookup(0)],
+            ))),
         }
     });
     /*
@@ -576,13 +822,15 @@ fn main() {
     Square.add_method(Signature::getter("hello"), |class| {
         dbg!(class.read_static_field("__classname"));
         MethodAst {
-            ast: Ast::Call(
-                Box::new(Ast::GlobalLookup(0 /* globals.read("System")*/)),
+            ast: Statement::Return(Expression::Call(
+                Box::new(Expression::GlobalLookup(0 /* globals.read("System")*/)),
                 AstSig::Func(
                     "print".into(),
-                    vec![Ast::LoadStatic(class.read_static_field("__classname"))],
+                    vec![Expression::ReadStatic(
+                        class.read_static_field("__classname"),
+                    )],
                 ),
-            ),
+            )),
         }
         /*
             bytecode.emit(ByteCode::LoadStatic(Square.static_field("__classname")));
@@ -593,7 +841,7 @@ fn main() {
     });
     Square.add_method(Signature::getter("foo"), |class| {
         MethodAst {
-            ast: Ast::ThisCall(AstSig::Getter("height".into())),
+            ast: Statement::Return(Expression::ThisCall(AstSig::Getter("height".into()))),
         }
         /*
             let word = "height";
@@ -625,9 +873,32 @@ fn main() {
 
     */
     let Square = Square.finish();
+    classes.push(&Square);
+    globals.declare("Square");
     dbg!(&Square);
     dbg!(&Rectangle);
 
+    // TODO: Generate ast for _start to init classes as classdefs are created
+
+    let top_level_ast = Statement::Block(vec![
+        Statement::AssignGlobal(
+            globals.declare("s"),
+            Box::new(Expression::Call(
+                Box::new(Expression::GlobalLookup(
+                    globals.get_index("Square").unwrap(),
+                )),
+                AstSig::Func("new".into(), vec![]),
+            )),
+        ),
+        Statement::ExprStatement(Expression::Call(
+            Box::new(Expression::GlobalLookup(globals.get_index("s").unwrap())),
+            AstSig::Getter("hello".into()),
+        )),
+    ]);
+
+    dbg!(&top_level_ast);
+
+    let mut asm = Assembler::new();
     // -> next stages
     // return (vec![Rectangle, Square], top_level_ast)
 }
@@ -684,3 +955,18 @@ fn main() {
 // E -->+-------+
 //
 // To search, start at the pointer for the class then scan upwards for the matching signature
+
+#[cfg(test)]
+mod type_tests {
+    use super::*;
+
+    fn test_type_commutative<'a>(a: Type<'a>, b: Type<'a>, expected: Type<'a>) {
+        assert_eq!(a.clone() | b.clone(), expected.clone());
+        assert_eq!(b | a, expected);
+    }
+
+    #[test]
+    fn same_types() {
+        test_type_commutative(Type::Unknown, Type::Unknown, Type::Unknown);
+    }
+}
