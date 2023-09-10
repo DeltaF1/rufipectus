@@ -41,6 +41,14 @@ enum GlobalClassSlots {
     End,
 }
 
+#[repr(usize)]
+pub(crate) enum ClassStructure {
+    NumFields = 0,
+    Supertype,
+    Name,
+    Methods,
+}
+
 /// Create a properly initialized Class, Object, and Object metaclass
 fn bootstrap_class() -> (ObjectRef, ObjectRef, ObjectRef) {
     const CLASS_NUM_FIELDS: usize = /*

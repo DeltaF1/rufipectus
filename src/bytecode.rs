@@ -1,6 +1,9 @@
 use crate::Arity;
 use crate::CodeAddress;
+use std::borrow::Cow;
 use std::collections::HashMap;
+
+use std::borrow::Borrow;
 
 #[derive(Debug)]
 struct StringAddress {}
@@ -163,10 +166,11 @@ impl Op {
 }
 
 #[derive(Debug)]
-struct Binary {
+pub struct Binary {
     bytes: Vec<u8>,
 }
 /*
+TODO: Add more to Binary
 pub struct Binary {
     instructions: [u8],
     strings: Vec<[u8]>,
@@ -174,6 +178,8 @@ pub struct Binary {
 
     // Keep track of how many global objects there are
     variables: usize
+
+    start: CodeAddress
 }
 */
 
@@ -236,16 +242,27 @@ impl<'a> From<Lookup<'a>> for AssemblerAddress<'a> {
 }
 
 #[derive(Debug)]
-enum AssemblerOffset<'a> {
+pub enum AssemblerOffset<'a> {
     Known(i32),
     Lookup(Lookup<'a>),
 }
 
+impl<'a> From<Lookup<'a>> for AssemblerOffset<'a> {
+    fn from(l: Lookup<'a>) -> AssemblerOffset<'a> {
+        AssemblerOffset::Lookup(l)
+    }
+}
+
 #[derive(Debug)]
 enum AssemblerNode<'a> {
-    Section(&'a str, Vec<AssemblerNode<'a>>),
-    Label(&'a str),
+    Section(Cow<'a, str>, Vec<AssemblerNode<'a>>),
+    Label(Cow<'a, str>),
     Op(AssemblerOp<'a>),
+}
+
+#[derive(Debug)]
+pub struct Section<'a> {
+    node: AssemblerNode<'a>,
 }
 
 impl<'text> AssemblerNode<'text> {
@@ -265,18 +282,21 @@ impl<'text> AssemblerNode<'text> {
 }
 
 #[derive(Hash, PartialEq, Debug, Clone)]
-enum Lookup<'a> {
-    Absolute(Vec<&'a str>),
-    Relative(Vec<&'a str>),
+pub enum Lookup<'a> {
+    Absolute(Vec<Cow<'a, str>>),
+    Relative(Vec<Cow<'a, str>>),
 }
 
 impl<'text> Lookup<'text> {
-    fn resolve(&self, base: &[&'text str]) -> Vec<&'text str> {
+    fn resolve<S>(&self, base: &[S]) -> Vec<Cow<'text, str>>
+    where
+        S: Into<Cow<'text, str>> + Clone,
+    {
         match self {
             Lookup::Absolute(v) => v.clone(),
             Lookup::Relative(v) => {
                 let mut v2 = vec![];
-                v2.extend_from_slice(base);
+                v2.extend(base.iter().map(|s| (*s).clone().into()));
                 v2.extend_from_slice(&v);
                 v2
             }
@@ -286,7 +306,7 @@ impl<'text> Lookup<'text> {
 
 impl<'a> From<&'a str> for Lookup<'a> {
     fn from(s: &'a str) -> Lookup<'a> {
-        Lookup::Absolute(vec![s])
+        Lookup::Relative(vec![s.into()])
     }
 }
 
@@ -297,7 +317,7 @@ impl<'a> From<&'a str> for AssemblerAddress<'a> {
 }
 
 #[derive(Debug)]
-struct MissingLabels {
+pub struct MissingLabels {
     labels: Vec<String>,
 }
 
@@ -320,51 +340,55 @@ enum FixupType {
 struct Fixup<'a> {
     location: usize,
     typ: FixupType,
-    key: Vec<&'a str>,
+    key: Vec<Cow<'a, str>>,
 }
 
 #[derive(Debug)]
 pub struct Assembler<'text> {
     root: AssemblerNode<'text>,
-    current_path: Vec<&'text str>,
+    current_path: Vec<Cow<'text, str>>,
     state: IntermediateState<'text>,
 }
 
 impl<'text> Assembler<'text> {
     pub fn new() -> Self {
         Assembler {
-            root: AssemblerNode::Section("", vec![]),
+            root: AssemblerNode::Section("".into(), vec![]),
             current_path: vec![],
             state: Default::default(),
         }
     }
 
     fn current_section(&mut self) -> &mut AssemblerNode<'text> {
-        self.borrow_section_mut(Lookup::Absolute(self.current_path.clone()))
+        self.borrow_section_mut(Lookup::Absolute(
+            self.current_path.iter().map(|s| (*s).clone()).collect(),
+        ))
     }
 
-    fn with_section<F>(&mut self, name: &'text str, mut f: F)
+    pub fn with_section<S, F>(&mut self, name: S, mut f: F)
     where
         F: FnMut(&mut Self),
+        S: Into<Cow<'text, str>>,
     {
+        let name = name.into();
         let cur = self.current_section();
 
-        let new_section = AssemblerNode::Section(name, vec![]);
+        let new_section = AssemblerNode::Section(name.clone(), vec![]);
         cur.get_vec_mut().push(new_section);
 
-        self.current_path.push(name);
+        self.current_path.push(name.into());
 
         f(self);
 
         self.current_path.pop();
     }
 
-    fn emit_op(&mut self, op: Op) {
+    pub fn emit_op(&mut self, op: Op) {
         let section = self.current_section().get_vec_mut();
         section.push(AssemblerNode::Op(AssemblerOp::StaticallyKnown(op)));
     }
 
-    fn label(&mut self, name: &'text str) {
+    pub fn label(&mut self, name: Cow<'text, str>) {
         let section = self.current_section().get_vec_mut();
         section.push(AssemblerNode::Label(name))
     }
@@ -380,9 +404,24 @@ impl<'text> Assembler<'text> {
         }
     }
 
-    fn emit_jump(&mut self, lookup: Lookup<'text>) {
-        let section = self.current_section().get_vec_mut();
-        section.push(VariableOp::Jump(lookup).into())
+    pub fn emit_jump(&mut self, offset: AssemblerOffset<'text>) {
+        match offset {
+            AssemblerOffset::Known(off) => self.emit_op(Op::Jump(off)),
+            AssemblerOffset::Lookup(lookup) => {
+                let section = self.current_section().get_vec_mut();
+                section.push(VariableOp::Jump(lookup).into())
+            }
+        }
+    }
+
+    pub fn emit_jump_if(&mut self, offset: AssemblerOffset<'text>) {
+        match offset {
+            AssemblerOffset::Known(off) => self.emit_op(Op::JumpIf(off)),
+            AssemblerOffset::Lookup(lookup) => {
+                let section = self.current_section().get_vec_mut();
+                section.push(VariableOp::JumpIf(lookup).into())
+            }
+        }
     }
 
     // FIXME: dirty is never called
@@ -398,14 +437,14 @@ impl<'text> Assembler<'text> {
 
         fn generate_node<'text>(
             node: &mut AssemblerNode<'text>,
-            current_section: &mut Vec<&'text str>,
+            current_section: &mut Vec<Cow<'text, str>>,
             output: &mut Vec<u8>,
-            labels: &mut HashMap<Vec<&'text str>, CodeAddress>,
+            labels: &mut HashMap<Vec<Cow<'text, str>>, CodeAddress>,
             fixups: &mut Vec<Fixup<'text>>,
         ) {
             match node {
                 AssemblerNode::Section(name, vec) => {
-                    current_section.push(name);
+                    current_section.push(name.clone());
                     if let Some(existing) = labels.insert(
                         current_section.clone(),
                         output
@@ -422,7 +461,7 @@ impl<'text> Assembler<'text> {
                     current_section.pop();
                 }
                 AssemblerNode::Label(name) => {
-                    current_section.push(name);
+                    current_section.push((*name).clone());
                     if let Some(existing) = labels.insert(
                         current_section.clone(),
                         output
@@ -604,8 +643,21 @@ impl<'text> Assembler<'text> {
         current
     }
 
-    fn address_of_label(&mut self, name: &[&str]) -> Result<CodeAddress, ()> {
-        Ok(self.get_or_generate()?.labels[name])
+    pub fn into_tree(self) -> Section<'text> {
+        Section { node: self.root }
+    }
+
+    pub fn insert_tree(&mut self, path: Lookup<'text>, tree: Section<'text>) {
+        let path = path.resolve(&self.current_path);
+        todo!("Unwrap and insert the section into our tree")
+    }
+
+    fn address_of_label<'a, S>(&mut self, name: &'a [S]) -> Result<CodeAddress, ()>
+    where
+        S: Into<Cow<'a, str>> + Clone,
+    {
+        Ok(self.get_or_generate()?.labels
+            [&name.iter().map(|s| (*s).clone().into()).collect::<Vec<_>>()])
     }
 }
 
@@ -619,7 +671,7 @@ enum IntermediateState<'text> {
 
 #[derive(Debug, Default)]
 struct Assembly<'text> {
-    labels: HashMap<Vec<&'text str>, CodeAddress>,
+    labels: HashMap<Vec<Cow<'text, str>>, CodeAddress>,
     fixups: Vec<Fixup<'text>>,
     generated: Vec<u8>,
 }
@@ -669,7 +721,7 @@ fn test_assembler() {
             asm.emit_call(2, "first".into());
             asm.emit_op(Op::Yield);
         });
-        asm.emit_jump(Lookup::Relative(["loop"].into()))
+        asm.emit_jump(Lookup::Relative(vec!["loop".into()]).into())
     });
 
     asm.with_section("first", |mut asm| {

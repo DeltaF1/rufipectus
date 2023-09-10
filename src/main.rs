@@ -5,6 +5,7 @@ use std::collections::{HashMap, HashSet};
 
 mod bytecode;
 use bytecode::Assembler;
+use bytecode::Lookup;
 
 mod runtime;
 
@@ -246,9 +247,9 @@ impl Arity {
     }
 }
 
-#[derive(PartialEq, Eq, Hash, Debug, Clone, Copy)]
+#[derive(PartialEq, Eq, Hash, Debug, Clone)]
 struct Signature<'a> {
-    name: &'a str,
+    name: Cow<'a, str>,
     arity: Arity,
 }
 
@@ -302,7 +303,7 @@ impl std::fmt::Display for Signature<'_> {
 impl<'a> From<&'a str> for Signature<'a> {
     fn from(name: &'a str) -> Signature {
         Signature {
-            name,
+            name: name.into(),
             arity: Arity::Func(0),
         }
     }
@@ -311,21 +312,21 @@ impl<'a> From<&'a str> for Signature<'a> {
 impl<'a> Signature<'a> {
     pub fn getter(name: &'a str) -> Self {
         Signature {
-            name,
+            name: name.into(),
             arity: Arity::Getter,
         }
     }
 
     pub fn setter(name: &'a str) -> Self {
         Signature {
-            name,
+            name: name.into(),
             arity: Arity::Setter,
         }
     }
 
     pub fn func(name: &'a str, n: usize) -> Self {
         Signature {
-            name,
+            name: name.into(),
             arity: Arity::Func(n),
         }
     }
@@ -356,12 +357,13 @@ struct MethodAst<'a> {
 }
 
 #[derive(Default)]
-struct ClassDef<'a> {
-    name: &'a str,
-    parent: Option<&'a ClassDef<'a>>,
-    fields: Vec<&'a str>,
-    static_fields: Vec<&'a str>,
-    methods: HashMap<Signature<'a>, Cell<MethodAst<'a>>>,
+struct ClassDef<'text> {
+    name: Cow<'text, str>,
+    // TODO: Rc<ClassDef<'text>>
+    parent: Option<&'text ClassDef<'text>>,
+    static_fields: Vec<&'text str>,
+    fields: Vec<&'text str>,
+    methods: HashMap<Signature<'text>, Cell<MethodAst<'text>>>,
 }
 
 impl std::fmt::Debug for ClassDef<'_> {
@@ -397,7 +399,7 @@ impl std::fmt::Debug for &MethodAst<'_> {
 }
 
 impl<'a> ClassDef<'a> {
-    fn new(name: &'a str) -> Self {
+    fn new(name: Cow<'a, str>) -> Self {
         ClassDef {
             name,
             ..Default::default()
@@ -486,7 +488,7 @@ impl<'a> ClassDef<'a> {
 impl<'a> ClassBuilder<'a> {
     pub fn new(name: &'a str) -> Self {
         ClassBuilder {
-            class: ClassDef::new(name),
+            class: ClassDef::new(name.into()),
             ..Default::default()
         }
     }
@@ -531,7 +533,7 @@ impl<'a> ClassBuilder<'a> {
     }
     */
 
-    pub fn add_method<'c, 'b, F>(&mut self, name: Signature<'a>, f: F) -> &Cell<MethodAst<'a>>
+    pub fn add_method<F>(&mut self, name: Signature<'a>, f: F) -> &Cell<MethodAst<'a>>
     where
         F: Fn(&mut Self) -> MethodAst<'a>,
     {
@@ -539,7 +541,7 @@ impl<'a> ClassBuilder<'a> {
         #[allow(clippy::map_entry)]
         if !self.class.methods.contains_key(&name) {
             let cell = f(self).into();
-            self.class.methods.insert(name, cell);
+            self.class.methods.insert(name.clone(), cell);
         }
         self.class.methods.get(&name).unwrap()
     }
