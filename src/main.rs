@@ -668,6 +668,7 @@ enum Expression<'a> {
         Box<Expression<'a>>,
     ),
     Primitive(Primitive),
+    InlineAsm(Vec<Expression<'a>>, bytecode::Section<'a>),
 }
 
 #[derive(Debug)]
@@ -744,6 +745,196 @@ impl<'text> Scope<'text> {
 
     fn contains(&self, name: &'text str) -> bool {
         self.names.contains(&name)
+    }
+}
+
+#[derive(Debug)]
+struct ClassMethodPair<'text>(Rc<ClassDef<'text>>, Signature<'text>);
+
+impl Eq for ClassMethodPair<'_> {}
+impl<'text> PartialEq for ClassMethodPair<'text> {
+    fn eq(&self, other: &ClassMethodPair<'text>) -> bool {
+        std::ptr::eq(&self.0 as *const _, &other.0 as *const _) && self.1 == other.1
+    }
+}
+
+use std::hash::Hash;
+impl Hash for ClassMethodPair<'_> {
+    fn hash<H>(&self, h: &mut H)
+    where
+        H: std::hash::Hasher,
+    {
+        std::ptr::hash(Rc::as_ptr(&self.0), h);
+        self.1.hash(h);
+    }
+}
+
+fn generate_latest_implementations<'text>(
+    classes: &[Rc<ClassDef<'text>>],
+) -> HashMap<ClassMethodPair<'text>, Rc<ClassDef<'text>>> {
+    let mut latest_implementation: HashMap<ClassMethodPair, Rc<ClassDef>> = HashMap::new();
+
+    // Prepare class information to lookup methods more efficiently
+
+    fn ancestors<'a, 'text>(class: &'a ClassDef<'text>) -> Vec<&'a Rc<ClassDef<'text>>> {
+        let mut vec = vec![];
+        let mut current = class;
+        while let Some(parent) = &current.parent {
+            vec.push(parent);
+            current = &parent;
+        }
+        vec
+    }
+
+    // Because classes is in creation-order, this will overwrite properly
+    for class in classes {
+        for ancestor in ancestors(&class) {
+            for method in ancestor.methods.keys() {
+                latest_implementation.insert(
+                    ClassMethodPair(Rc::clone(&class), method.clone()),
+                    Rc::clone(ancestor),
+                );
+            }
+
+            for method in class.methods.keys() {
+                latest_implementation.remove(&ClassMethodPair(Rc::clone(ancestor), method.clone()));
+            }
+        }
+        for method in class.methods.keys() {
+            latest_implementation.insert(
+                ClassMethodPair(Rc::clone(&class), method.clone()),
+                Rc::clone(&class),
+            );
+        }
+    }
+
+    dbg!(latest_implementation
+        .iter()
+        .map(|(k, v)| {
+            let ClassMethodPair(c1, m) = k;
+            let c2 = v;
+
+            ((&c1.name, m.to_string()), &c2.name)
+        })
+        .collect::<Vec<_>>());
+
+    latest_implementation
+}
+
+#[derive(Debug)]
+enum CallTarget<'text> {
+    Dynamic(Signature<'text>),
+    Static(Rc<ClassDef<'text>>, Signature<'text>),
+}
+
+impl<'text> std::cmp::PartialEq for CallTarget<'text> {
+    fn eq(&self, other: &CallTarget<'text>) -> bool {
+        match (self, other) {
+            (CallTarget::Dynamic(sig1), CallTarget::Dynamic(sig2)) => sig1 == sig2,
+            (CallTarget::Static(class1, sig1), CallTarget::Static(class2, sig2)) => {
+                (sig1 == sig2) && Rc::ptr_eq(class1, class2)
+            }
+            _ => false,
+        }
+    }
+}
+
+fn resolve_call_target<'a, 'text>(
+    classes: &'a HashMap<&'text str, Rc<ClassDef<'text>>>,
+    typ: Type<'text>,
+    sig: Signature<'text>,
+) -> CallTarget<'text> {
+    let latest_implementation: HashMap<ClassMethodPair, Rc<ClassDef>> = HashMap::new();
+    match typ {
+        Type::Unknown | Type::KnownType(BroadType::Object) => CallTarget::Dynamic(sig),
+        Type::KnownType(BroadType::Bool) => CallTarget::Static(Rc::clone(&classes["Bool"]), sig),
+        Type::KnownType(BroadType::Number) => CallTarget::Static(Rc::clone(&classes["Num"]), sig),
+        Type::KnownType(BroadType::String) => {
+            CallTarget::Static(Rc::clone(&classes["String"]), sig)
+        }
+        Type::KnownType(BroadType::Range) => CallTarget::Static(Rc::clone(&classes["Range"]), sig),
+        Type::KnownPrimitive(p) => {
+            todo!("Match p and recurse with appropriate BroadType")
+        }
+        Type::KnownClassOrSubtype(class) => {
+            let latest = latest_implementation.get(&ClassMethodPair(class, sig.clone()));
+            if let Some(latest) = latest {
+                CallTarget::Static(Rc::clone(latest), sig)
+            } else {
+                CallTarget::Dynamic(sig)
+            }
+        }
+        Type::KnownClass(class) => {
+            if let Some(target) = ClassDef::find_class_with_method(&class, &sig) {
+                CallTarget::Static(target, sig)
+            } else {
+                panic!(
+                    "Statically determined it's impossible to call {sig} for class {0}",
+                    class.name
+                )
+            }
+        }
+    }
+}
+
+fn type_of_expr<'a, 'text>(
+    ast: &'a Expression<'text>,
+    this_type: Option<&Rc<ClassDef<'text>>>,
+) -> Type<'text>
+where
+    'a: 'text,
+{
+    match ast {
+        Expression::Call(receiver, ast_sig) => {
+            let receiver_type = type_of_expr(receiver, this_type);
+            let target = resolve_call_target(todo!(), receiver_type, ast_sig.into());
+            match target {
+                CallTarget::Dynamic(_) => Type::Unknown,
+                CallTarget::Static(cls, sig) => {
+                    todo!("Magic to determine if this method is a constructor")
+                    // if cls.is_constructor(sig) {
+                    //      Type::KnownClass(cls)
+                    // } else {
+                    //      Type::Unknown
+                    // }
+                }
+            }
+        }
+        Expression::SuperCall(ast_sig) => {
+            todo!()
+        }
+        Expression::ThisCall(ast_sig) => {
+            let receiver_type = Type::KnownClassOrSubtype(Rc::clone(this_type.unwrap()));
+            let target = resolve_call_target(todo!(), receiver_type, ast_sig.into());
+            match target {
+                CallTarget::Dynamic(_) => Type::Unknown,
+                CallTarget::Static(cls, sig) => {
+                    todo!("Magic to determine if this method is a constructor")
+                    // if cls.is_constructor(sig) {
+                    //      Type::KnownClass(cls)
+                    // } else {
+                    //      Type::Unknown
+                    // }
+                }
+            }
+        }
+        Expression::ArgLookup(_) => {
+            // TODO: Are there any arg types that are statically known?
+            Type::Unknown
+        }
+        Expression::Ternary(_condition, then, r#else) => {
+            match type_of_expr(_condition, this_type.clone()).truthiness() {
+                Some(true) => type_of_expr(then, this_type),
+                Some(false) => type_of_expr(r#else, this_type),
+                None => type_of_expr(then, this_type.clone()) | type_of_expr(r#else, this_type),
+            }
+        }
+        Expression::Primitive(p) => Type::KnownPrimitive(p.clone()),
+        Expression::ReadField(_)
+        | Expression::ReadStatic(_)
+        | Expression::GlobalLookup(_)
+        | Expression::LocalLookup(_) => Type::Unknown,
+        Expression::InlineAsm(_, _) => Type::Unknown,
     }
 }
 
@@ -959,170 +1150,29 @@ fn main() {
     ]);
 
     dbg!(&top_level_ast);
-
-    #[derive(Debug)]
-    struct ClassMethodPair<'a, 'text>(&'a ClassDef<'text>, Signature<'text>);
-
-    impl Eq for ClassMethodPair<'_, '_> {}
-    impl<'a, 'text> PartialEq for ClassMethodPair<'a, 'text> {
-        fn eq(&self, other: &ClassMethodPair<'a, 'text>) -> bool {
-            std::ptr::eq(self.0 as *const _, other.0 as *const _) && self.1 == other.1
         }
-    }
 
-    use std::hash::Hash;
-    impl Hash for ClassMethodPair<'_, '_> {
-        fn hash<H>(&self, h: &mut H)
-        where
-            H: std::hash::Hasher,
-        {
-            std::ptr::hash(self.0, h);
-            self.1.hash(h);
         }
-    }
 
-    let mut latest_implementation: HashMap<ClassMethodPair, &ClassDef> = HashMap::new();
-
-    // Prepare class information to lookup methods more efficiently
-
-    fn ancestors<'a, 'text>(class: &'a ClassDef<'text>) -> Vec<&'a ClassDef<'text>> {
-        let mut vec = vec![];
-        let mut current = class;
-        while let Some(parent) = current.parent {
-            vec.push(parent);
-            current = parent;
         }
-        vec
-    }
 
-    // Because classes is in creation-order, this will overwrite properly
-    for class in classes {
-        for ancestor in ancestors(class) {
-            for method in ancestor.methods.keys() {
-                latest_implementation.insert(ClassMethodPair(class, method.clone()), ancestor);
-            }
-
-            for method in class.methods.keys() {
-                latest_implementation.remove(&ClassMethodPair(ancestor, method.clone()));
-            }
-        }
-        for method in class.methods.keys() {
-            latest_implementation.insert(ClassMethodPair(class, method.clone()), class);
-        }
-    }
-
-    dbg!(latest_implementation
-        .iter()
-        .map(|(k, v)| {
-            let ClassMethodPair(c1, m) = k;
-            let c2 = v;
-
-            ((c1.name, m.to_string()), c2.name)
-        })
-        .collect::<Vec<_>>());
-
-    enum CallTarget<'a, 'text> {
-        Dynamic(Signature<'text>),
-        Static(&'a ClassDef<'text>, Signature<'text>),
-    }
-
-    fn resolve_call_target<'a, 'text>(
-        x: &'a (),
-        typ: Type<'text>,
-        sig: Signature<'text>,
-    ) -> CallTarget<'a, 'text> {
-        let classes: HashMap<&'static str, ClassDef> = HashMap::new();
-        let latest_implementation: HashMap<ClassMethodPair, &ClassDef> = HashMap::new();
-        let call = match typ {
-            Type::Unknown | Type::KnownType(BroadType::Object) => CallTarget::Dynamic(sig),
-            Type::KnownType(BroadType::Bool) => CallTarget::Static(&classes["Bool"], sig),
-            Type::KnownType(BroadType::Number) => CallTarget::Static(&classes["Num"], sig),
-            Type::KnownType(BroadType::String) => CallTarget::Static(&classes["String"], sig),
-            Type::KnownType(BroadType::Range) => CallTarget::Static(&classes["Range"], sig),
-            Type::KnownPrimitive(p) => {
-                todo!("Match p and recurse with appropriate BroadType")
-            }
-            Type::KnownClassOrSubtype(class) => {
-                let latest = latest_implementation.get(&ClassMethodPair(class, sig.clone()));
-                if let Some(latest) = latest {
-                    CallTarget::Static(latest, sig)
-                } else {
-                    CallTarget::Dynamic(sig)
-                }
-            }
-            Type::KnownClass(class) => {
-                if let Some(target) = class.find_class_with_method(&sig) {
-                    CallTarget::Static(target, sig)
-                } else {
-                    panic!(
-                        "Statically determined it's impossible to call {sig} for class {0}",
-                        class.name
-                    )
-                }
-            }
-        };
-        todo!("Lifetimes")
-    }
-
-    fn type_of_expr<'a, 'text>(
-        ast: &'a Expression<'text>,
-        this_type: Option<&'a ClassDef<'text>>,
-    ) -> Type<'text>
-    where
-        'a: 'text,
-    {
-        match ast {
-            Expression::Call(receiver, ast_sig) => {
-                let receiver_type = type_of_expr(receiver, this_type);
-                let target = resolve_call_target(&(), receiver_type, ast_sig.into());
-                match target {
-                    CallTarget::Dynamic(_) => Type::Unknown,
-                    CallTarget::Static(cls, sig) => {
-                        todo!("Magic to determine if this method is a constructor")
-                        // if cls.is_constructor(sig) {
-                        //      Type::KnownClass(cls)
-                        // } else {
-                        //      Type::Unknown
-                        // }
+        fn walk_tree<'a>(tree: mut Ast<'a>) -> Ast<'a> {
+            match tree {
+               Ast::Expression(e) => {
+                    if type_of_expr(e, None) == KnownPrimitive(p) {
+                       replace e with Expression::Primitive(p)
                     }
-                }
+
+                    match e {
+                        Expression::Ternary(cond, then, r#else) => {
+                            if type_of_expr(cond, None).truthiness {
+                                replce with then or else
+                            }
+                        }
+                    }                     }
+               }
             }
-            Expression::SuperCall(ast_sig) => {
-                todo!()
-            }
-            Expression::ThisCall(ast_sig) => {
-                let receiver_type = Type::KnownClassOrSubtype(this_type.unwrap());
-                let target = resolve_call_target(&(), receiver_type, ast_sig.into());
-                match target {
-                    CallTarget::Dynamic(_) => Type::Unknown,
-                    CallTarget::Static(cls, sig) => {
-                        todo!("Magic to determine if this method is a constructor")
-                        // if cls.is_constructor(sig) {
-                        //      Type::KnownClass(cls)
-                        // } else {
-                        //      Type::Unknown
-                        // }
-                    }
-                }
-            }
-            Expression::ArgLookup(_) => {
-                // TODO: Are there any arg types that are statically known?
-                Type::Unknown
-            }
-            Expression::Ternary(_condition, then, r#else) => {
-                match type_of_expr(_condition, this_type).truthiness() {
-                    Some(true) => type_of_expr(then, this_type),
-                    Some(false) => type_of_expr(r#else, this_type),
-                    None => type_of_expr(then, this_type) | type_of_expr(r#else, this_type),
-                }
-            },
-            Expression::Primitive(p) => {
-                Type::KnownPrimitive(p.clone())
-            },
-            Expression::ReadField(_)
-            | Expression::ReadStatic(_)
-            | Expression::GlobalLookup(_)
-            | Expression::LocalLookup(_) => Type::Unknown,
+            tree
         }
     }
 
