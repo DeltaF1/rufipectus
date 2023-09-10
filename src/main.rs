@@ -3,6 +3,8 @@ use std::borrow::Cow;
 use std::cell::Cell;
 use std::collections::{HashMap, HashSet};
 
+use std::rc::Rc;
+
 mod bytecode;
 use bytecode::Assembler;
 use bytecode::Lookup;
@@ -36,6 +38,10 @@ where
 
     pub fn get_index(&self, item: &T) -> Option<usize> {
         self.items.iter().position(|o| o == item)
+    }
+
+    pub fn contains(&self, item: &T) -> bool {
+        self.items.contains(item)
     }
 
     pub fn read_use(&mut self, item: T) -> usize {
@@ -77,8 +83,8 @@ enum Type<'a> {
     Unknown,
     KnownType(BroadType),
     KnownPrimitive(Primitive),
-    KnownClassOrSubtype(&'a ClassDef<'a>),
-    KnownClass(&'a ClassDef<'a>), // Only possible to glean from constructors
+    KnownClassOrSubtype(Rc<ClassDef<'a>>),
+    KnownClass(Rc<ClassDef<'a>>), // Only possible to glean from constructors
 }
 
 impl<'a> PartialEq for Type<'a> {
@@ -176,22 +182,22 @@ impl<'text> BitOr<Type<'text>> for Type<'text> {
             }
             (Type::KnownClassOrSubtype(c1), Type::KnownClass(c2))
             | (Type::KnownClassOrSubtype(c1), Type::KnownClassOrSubtype(c2)) => {
-                if std::ptr::eq(c1, c2) {
+                if Rc::ptr_eq(&c1, &c2) {
                     Type::KnownClassOrSubtype(c1)
-                } else if c2.is_subclass_of(c1) {
+                } else if c2.is_subclass_of(&c1) {
                     Type::KnownClassOrSubtype(c1)
-                } else if c1.is_subclass_of(c2) {
+                } else if c1.is_subclass_of(&c2) {
                     Type::KnownClassOrSubtype(c2)
                 } else {
                     Type::Unknown
                 }
             }
             (Type::KnownClass(c1), Type::KnownClass(c2)) => {
-                if std::ptr::eq(c1, c2) {
+                if Rc::ptr_eq(&c1, &c2) {
                     Type::KnownClass(c1)
-                } else if c2.is_subclass_of(c1) {
+                } else if c2.is_subclass_of(&c1) {
                     Type::KnownClassOrSubtype(c1)
-                } else if c1.is_subclass_of(c2) {
+                } else if c1.is_subclass_of(&c2) {
                     Type::KnownClassOrSubtype(c2)
                 } else {
                     Type::Unknown
@@ -348,6 +354,7 @@ impl Signature<'_> {
 #[derive(Default, Debug)]
 struct ClassBuilder<'a> {
     class: ClassDef<'a>,
+    meta_class: ClassDef<'a>,
     fields: InitializedOrderedSet<&'a str>,
     static_fields: InitializedOrderedSet<&'a str>,
 }
@@ -360,8 +367,7 @@ struct MethodAst<'a> {
 struct ClassDef<'text> {
     name: Cow<'text, str>,
     // TODO: Rc<ClassDef<'text>>
-    parent: Option<&'text ClassDef<'text>>,
-    static_fields: Vec<&'text str>,
+    parent: Option<Rc<ClassDef<'text>>>,
     fields: Vec<&'text str>,
     methods: HashMap<Signature<'text>, Cell<MethodAst<'text>>>,
 }
@@ -374,9 +380,8 @@ impl std::fmt::Debug for ClassDef<'_> {
             .map(|(k, v)| -> (&Signature, *const MethodAst) { (k, v.as_ptr()) });
         f.debug_struct("ClassDef")
             .field("name", &self.name)
-            .field("parent", &self.parent.map(|p| p.name))
+            .field("parent", &self.parent.as_ref().map(|p| &p.name))
             .field("fields", &self.fields)
-            .field("static_fields", &self.static_fields)
             .field(
                 "methods",
                 &un_celled
@@ -409,30 +414,31 @@ impl<'a> ClassDef<'a> {
     pub fn is_subclass_of(&self, other: &ClassDef<'a>) -> bool {
         let mut current = self;
 
-        while let Some(ancestor) = current.parent {
-            if std::ptr::eq(ancestor, other) {
+        while let Some(ancestor) = &current.parent {
+            if std::ptr::eq(&**ancestor, other) {
                 return true;
             }
 
-            current = ancestor;
+            current = &ancestor;
         }
 
         false
     }
 
-    pub fn child_of(&'a self, name: &'a str) -> ClassBuilder<'a> {
+    pub fn child_of(parent: &Rc<ClassDef<'a>>, name: &'a str) -> ClassBuilder<'a> {
         ClassBuilder {
             class: ClassDef {
-                name,
-                parent: Some(self),
+                name: name.into(),
+                parent: Some(parent.clone()),
                 ..Default::default()
             },
+            meta_class: ClassDef::new((name.to_owned() + " metaclass").into()),
             ..Default::default()
         }
     }
 
     fn num_parent_fields(&self) -> usize {
-        self.parent.map_or(0, ClassDef::num_fields)
+        self.parent.as_deref().map_or(0, ClassDef::num_fields)
     }
 
     fn num_fields(&self) -> usize {
@@ -446,38 +452,35 @@ impl<'a> ClassDef<'a> {
             .map(|existing| existing + self.num_parent_fields())
     }
 
-    pub fn get_static_field_index(&self, name: &str) -> Option<usize> {
-        self.static_fields.iter().position(|sf| sf == &name)
-    }
-
-    pub fn find_method(&self, sig: &Signature<'a>) -> Option<&'a Cell<MethodAst>> {
+    pub fn find_method<'b>(&'b self, sig: &Signature<'a>) -> Option<&'b Cell<MethodAst<'a>>> {
         let mut next = Some(self);
         while let Some(cls) = next {
             if let Some(cell) = cls.methods.get(sig) {
                 return Some(cell);
             }
-            next = cls.parent;
+            next = cls.parent.as_deref();
         }
         None
     }
 
-    fn find_class_with_method(&self, sig: &Signature<'a>) -> Option<&ClassDef<'a>> {
+    fn find_class_with_method(self: &Rc<Self>, sig: &Signature<'a>) -> Option<Rc<ClassDef<'a>>> {
         if self.methods.contains_key(sig) {
-            Some(self)
+            Some(self.clone())
         } else {
             self.parent
-                .and_then(|parent| parent.find_class_with_method(sig))
+                .as_ref()
+                .and_then(|parent| ClassDef::find_class_with_method(parent, sig))
         }
     }
 
     /// Only used for debugging
-    fn find_field_in_parents(&self, name: &str) -> Option<(&ClassDef<'a>, usize)> {
-        let mut to_search = self.parent;
+    fn find_field_in_parents(&self, name: &str) -> Option<(Rc<ClassDef<'a>>, usize)> {
+        let mut to_search = &self.parent;
 
         while let Some(class) = to_search {
-            to_search = class.parent;
+            to_search = &class.parent;
             if let Some(i) = class.get_field_index(name) {
-                return Some((class, i));
+                return Some((Rc::clone(&class), i));
             }
         }
 
@@ -489,6 +492,7 @@ impl<'a> ClassBuilder<'a> {
     pub fn new(name: &'a str) -> Self {
         ClassBuilder {
             class: ClassDef::new(name.into()),
+            meta_class: ClassDef::new((name.to_owned() + " metaclass").into()),
             ..Default::default()
         }
     }
@@ -513,13 +517,12 @@ impl<'a> ClassBuilder<'a> {
         }
     }
 
-    // TODO: Static fields can just be globals
     pub fn write_static_field(&mut self, name: &'a str) -> usize {
-        self.static_fields.write_use(name) // + globals.len()
+        self.static_fields.write_use(name)
     }
 
     pub fn read_static_field(&mut self, name: &'a str) -> usize {
-        self.static_fields.read_use(name) // + globals.len()
+        self.static_fields.read_use(name)
     }
 
     /*
@@ -532,6 +535,47 @@ impl<'a> ClassBuilder<'a> {
        }
     }
     */
+    pub fn add_constructor<F>(&mut self, sig: Signature<'a>, f: F) -> &Cell<MethodAst<'a>>
+    where
+        F: Fn(&mut Self) -> MethodAst<'a>,
+    {
+        // TODO: How to add a type hint at this point in the process?
+        let asm = {
+            let mut assembler = Assembler::new();
+            assembler.emit_op(bytecode::Op::ReadField(
+                runtime::ClassStructure::NumFields as usize,
+            ));
+            assembler.emit_op(bytecode::Op::PushThis);
+            assembler.emit_op(bytecode::Op::NativeCall(bytecode::NativeCall::NewObject));
+            assembler.into_tree()
+        };
+
+        self.meta_class.methods.insert(
+            sig.clone(),
+            MethodAst {
+                ast: Statement::Return(Expression::InlineAsm(vec![], asm)),
+            }
+            .into(),
+        );
+        let init_sig = Signature {
+            name: sig.name.to_owned() + " init",
+            arity: sig.arity,
+        };
+        self.add_method(init_sig, f)
+    }
+
+    pub fn add_static_method<F>(&mut self, sig: Signature<'a>, f: F) -> &Cell<MethodAst<'a>>
+    where
+        F: Fn(&mut Self) -> MethodAst<'a>,
+    {
+        // This is necessary because the .get gets confused about the borrow otherwise
+        #[allow(clippy::map_entry)]
+        if !self.meta_class.methods.contains_key(&sig) {
+            let cell = f(self).into();
+            self.meta_class.methods.insert(sig.clone(), cell);
+        }
+        self.meta_class.methods.get(&sig).unwrap()
+    }
 
     pub fn add_method<F>(&mut self, name: Signature<'a>, f: F) -> &Cell<MethodAst<'a>>
     where
@@ -548,11 +592,12 @@ impl<'a> ClassBuilder<'a> {
 
     pub fn finish(self) -> ClassDef<'a> {
         let mut class = self.class;
+        let mut meta_class = self.meta_class;
         class.fields = self.fields.validate().unwrap();
         // TODO: Result type
         // panic!("Field {field} in class {} is never written to!", self.class.name)
 
-        class.static_fields = self.static_fields.validate().unwrap();
+        meta_class.fields = self.static_fields.validate().unwrap();
 
         class
     }
@@ -657,14 +702,24 @@ impl<'a> From<&'a AstSig<'_>> for Signature<'a> {
     }
 }
 
-#[derive(Default)]
+#[derive(Default, Clone)]
 struct Scope<'text> {
+    shadowed: Option<Vec<&'text str>>,
     names: Vec<&'text str>,
 }
 
 impl<'text> Scope<'text> {
     fn new() -> Self {
         Default::default()
+    }
+
+    fn shadow(&self) -> Self {
+        let mut shadowed = self.shadowed.clone().unwrap_or(vec![]);
+        shadowed.extend_from_slice(&self.names);
+        Scope {
+            shadowed: Some(shadowed),
+            ..Default::default()
+        }
     }
 
     fn declare(&mut self, name: &'text str) -> usize {
@@ -676,21 +731,31 @@ impl<'text> Scope<'text> {
     }
 
     fn get_index(&self, name: &'text str) -> Option<usize> {
-        self.names.iter().position(|n| n == &name)
+        self.names
+            .iter()
+            .position(|n| n == &name)
+            .map(|n| n + self.shadowed.as_ref().map(|v| v.len()).unwrap_or(0))
+            .or_else(|| {
+                self.shadowed
+                    .as_ref()
+                    .and_then(|v| v.iter().rev().position(|n| n == &name).map(|n| v.len() - n))
+            })
+    }
+
+    fn contains(&self, name: &'text str) -> bool {
+        self.names.contains(&name)
     }
 }
 
 fn main() {
     let mut globals = Scope::new();
-    let mut classes: Vec<&ClassDef> = vec![];
+    let mut classes: Vec<Rc<ClassDef>> = vec![];
     let mut Rectangle = ClassBuilder::new("Rectangle");
 
     Rectangle.add_method(Signature::getter("width"), |class| {
         dbg!(class.read_field("_width"));
         MethodAst {
-            ast: Statement::Return(Expression::ReadField(
-                class.read_field("_width"),
-            )),
+            ast: Statement::Return(Expression::ReadField(class.read_field("_width"))),
         }
     });
     /*
@@ -704,9 +769,7 @@ fn main() {
     Rectangle.add_method(Signature::getter("height"), |class| {
         dbg!(class.read_field("_height"));
         MethodAst {
-            ast: Statement::Return(Expression::ReadField(
-                class.read_field("_height"),
-            )),
+            ast: Statement::Return(Expression::ReadField(class.read_field("_height"))),
         }
         /*
         // if existing, error with "duplicate method"
@@ -784,14 +847,14 @@ fn main() {
     //
 
     */
-    let Rectangle = Rectangle.finish();
-    classes.push(&Rectangle);
+    let Rectangle = Rc::new(Rectangle.finish());
+    classes.push(Rectangle.clone());
     globals.declare("Rectangle");
-    let mut Square = Rectangle.child_of("Square");
+    let mut Square = ClassDef::child_of(&Rectangle, "Square");
     // TODO: Creates a static method called "new" with auto-generated constructor code,
     // and an instance method called "new init". The
     // space makes it uncallable by normal code
-    Square.add_method(Signature::func("new init", 0), |class| {
+    Square.add_constructor(Signature::func("new", 1), |class| {
         /*
         bytecode.emit(ByteCode::PushConst("Square"));
         bytecode.emit(ByteCode::StoreStatic(Square.static_field("__classname")));
@@ -800,11 +863,8 @@ fn main() {
         */
         dbg!(class.write_static_field("__classname"));
         let sig = Signature::func("new init", 2);
-        if let Some(index) = class
-            .class
-            .parent
-            .and_then(|parent| parent.find_method(&sig))
-        {
+        let parent = &class.class.parent;
+        if let Some(index) = &parent.as_ref().and_then(|p| p.find_method(&sig)) {
             /*
             bytecode.emit(ByteCode::CallAddress(index));
             */
@@ -874,8 +934,8 @@ fn main() {
     bytecode.emit(ByteCode::CallDynamic("hello"));
 
     */
-    let Square = Square.finish();
-    classes.push(&Square);
+    let Square = Rc::new(Square.finish());
+    classes.push(Rc::clone(&Square));
     globals.declare("Square");
     dbg!(&Square);
     dbg!(&Rectangle);
