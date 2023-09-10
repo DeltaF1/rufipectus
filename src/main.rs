@@ -754,7 +754,7 @@ struct ClassMethodPair<'text>(Rc<ClassDef<'text>>, Signature<'text>);
 impl Eq for ClassMethodPair<'_> {}
 impl<'text> PartialEq for ClassMethodPair<'text> {
     fn eq(&self, other: &ClassMethodPair<'text>) -> bool {
-        std::ptr::eq(&self.0 as *const _, &other.0 as *const _) && self.1 == other.1
+        Rc::ptr_eq(&self.0, &other.0) && (self.1 == other.1)
     }
 }
 
@@ -769,7 +769,9 @@ impl Hash for ClassMethodPair<'_> {
     }
 }
 
+/// classes must be in creation order!
 fn generate_latest_implementations<'text>(
+    // TODO: &[&Rc..]
     classes: &[Rc<ClassDef<'text>>],
 ) -> HashMap<ClassMethodPair<'text>, Rc<ClassDef<'text>>> {
     let mut latest_implementation: HashMap<ClassMethodPair, Rc<ClassDef>> = HashMap::new();
