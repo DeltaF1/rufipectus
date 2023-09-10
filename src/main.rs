@@ -843,10 +843,10 @@ impl<'text> std::cmp::PartialEq for CallTarget<'text> {
 
 fn resolve_call_target<'a, 'text>(
     classes: &'a HashMap<&'text str, Rc<ClassDef<'text>>>,
+    latest_implementation: &HashMap<ClassMethodPair<'text>, Rc<ClassDef<'text>>>,
     typ: Type<'text>,
     sig: Signature<'text>,
 ) -> CallTarget<'text> {
-    let latest_implementation: HashMap<ClassMethodPair, Rc<ClassDef>> = HashMap::new();
     match typ {
         Type::Unknown | Type::KnownType(BroadType::Object) => CallTarget::Dynamic(sig),
         Type::KnownType(BroadType::Bool) => CallTarget::Static(Rc::clone(&classes["Bool"]), sig),
@@ -889,7 +889,7 @@ where
     match ast {
         Expression::Call(receiver, ast_sig) => {
             let receiver_type = type_of_expr(receiver, this_type);
-            let target = resolve_call_target(todo!(), receiver_type, ast_sig.into());
+            let target = resolve_call_target(todo!(), todo!(), receiver_type, ast_sig.into());
             match target {
                 CallTarget::Dynamic(_) => Type::Unknown,
                 CallTarget::Static(cls, sig) => {
@@ -907,7 +907,7 @@ where
         }
         Expression::ThisCall(ast_sig) => {
             let receiver_type = Type::KnownClassOrSubtype(Rc::clone(this_type.unwrap()));
-            let target = resolve_call_target(todo!(), receiver_type, ast_sig.into());
+            let target = resolve_call_target(todo!(), todo!(), receiver_type, ast_sig.into());
             match target {
                 CallTarget::Dynamic(_) => Type::Unknown,
                 CallTarget::Static(cls, sig) => {
@@ -1251,6 +1251,15 @@ mod type_tests {
         todo!("test cases");
     }
 
+    // A <- B <- C
+    // A
+    //  - foo(_,_,_)
+    //  - foo(_,_)
+    // B
+    //  - foo(_,_,_)
+    // C
+    //  - foo(_,_,_)
+    //  - baz(_,_,_)
     fn class_hierarchy() -> (
         Rc<ClassDef<'static>>,
         Rc<ClassDef<'static>>,
@@ -1259,6 +1268,7 @@ mod type_tests {
         Signature<'static>,
         Signature<'static>,
         HashMap<&'static str, Rc<ClassDef<'static>>>,
+        HashMap<ClassMethodPair<'static>, Rc<ClassDef<'static>>>,
     ) {
         let foo = Signature::func("foo", 3);
         let foo2 = Signature::func("foo", 2);
@@ -1287,16 +1297,83 @@ mod type_tests {
 
         let c = Rc::new(c.finish());
         classes.insert("C", Rc::clone(&c));
-        (a, b, c, foo, foo2, baz, classes)
+        (
+            Rc::clone(&a),
+            Rc::clone(&b),
+            Rc::clone(&c),
+            foo,
+            foo2,
+            baz,
+            classes,
+            generate_latest_implementations(&[a, b, c]),
+        )
+    }
+
+    macro_rules! call_target {
+        (static $class:ident [ $sig:ident ]) => {{
+            CallTarget::Static(Rc::clone(&$class), ($sig).clone())
+        }};
+
+        (dyn $sig:ident) => {{
+            CallTarget::Dynamic($sig.clone())
+        }};
+    }
+
+    macro_rules! expect_call_target {
+        ($classes:ident , $latest_implementation:ident , $class:ident [ $sig:ident ] , $expected:expr ) => {
+            assert_eq!(
+                resolve_call_target(
+                    &$classes,
+                    &$latest_implementation,
+                    Type::KnownClass(Rc::clone(&$class)),
+                    $sig.clone()
+                ),
+                $expected
+            )
+        };
+
+        ($classes:ident , $latest_implementation:ident , ? $class:ident [ $sig:ident ] , $expected:expr ) => {
+            assert_eq!(
+                resolve_call_target(
+                    &$classes,
+                    &$latest_implementation,
+                    Type::KnownClassOrSubtype(Rc::clone(&$class)),
+                    $sig.clone()
+                ),
+                $expected
+            )
+        };
+    }
+
+    #[test]
+    fn known_class() {
+        let (a, b, c, foo, foo2, baz, classes, li) = class_hierarchy();
+        expect_call_target!(classes, li, c[foo], call_target!(static c[foo]));
+        expect_call_target!(classes, li, b[foo], call_target!(static b[foo]));
+        expect_call_target!(classes, li, a[foo], call_target!(static a[foo]));
     }
 
     #[test]
     fn shadowed_by_subtype() {
-        let (a, b, c, foo, foo2, baz, classes) = class_hierarchy();
-        assert_eq!(
-            CallTarget::Static(Rc::clone(&c), foo.clone()),
-            resolve_call_target(&classes, Type::KnownClass(Rc::clone(&c)), foo.clone())
-        );
+        let (a, b, c, foo, foo2, baz, classes, li) = class_hierarchy();
+        expect_call_target!(classes, li, ?c[foo], call_target!(static c[foo]));
+        expect_call_target!(classes, li, ?b[foo], call_target!(dyn foo));
+        expect_call_target!(classes, li, ?a[foo], call_target!(dyn foo));
+    }
+
+    #[test]
+    fn method_in_parent() {
+        let (a, b, c, foo, foo2, baz, classes, li) = class_hierarchy();
+        expect_call_target!(classes, li, ?c[foo2], call_target!(static a[foo2]));
+        expect_call_target!(classes, li, ?b[foo2], call_target!(static a[foo2]));
+        expect_call_target!(classes, li, ?a[foo2], call_target!(static a[foo2]));
+    }
+
+    #[test]
+    #[should_panic(expected = "Statically determined it's impossible to call baz(_,_,_) for class B")]
+    fn unreachable_method() {
+        let (a, b, c, foo, foo2, baz, classes, li) = class_hierarchy();
+        resolve_call_target(&classes, &li, Type::KnownClass(Rc::clone(&b)), baz.clone());
     }
 }
 
