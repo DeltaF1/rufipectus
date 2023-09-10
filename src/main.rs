@@ -1246,5 +1246,96 @@ mod type_tests {
     #[test]
     fn same_types() {
         test_type_commutative(Type::Unknown, Type::Unknown, Type::Unknown);
+        todo!("test cases");
+    }
+
+    fn class_hierarchy() -> (
+        Rc<ClassDef<'static>>,
+        Rc<ClassDef<'static>>,
+        Rc<ClassDef<'static>>,
+        Signature<'static>,
+        Signature<'static>,
+        Signature<'static>,
+        HashMap<&'static str, Rc<ClassDef<'static>>>,
+    ) {
+        let foo = Signature::func("foo", 3);
+        let foo2 = Signature::func("foo", 2);
+        let baz = Signature::func("baz", 3);
+        fn dummy_func<'text>(_: &mut ClassBuilder<'text>) -> MethodAst<'static> {
+            MethodAst {
+                ast: Statement::Return(Expression::Primitive(Primitive::Null)),
+            }
+        }
+        let mut classes = HashMap::new();
+
+        let mut a = ClassBuilder::new("A");
+        a.add_method(foo.clone(), dummy_func);
+        a.add_method(foo2.clone(), dummy_func);
+        let a = Rc::new(a.finish());
+        classes.insert("A", Rc::clone(&a));
+
+        let mut b = ClassDef::child_of(&a, "B");
+        b.add_method(foo.clone(), dummy_func);
+        let b = Rc::new(b.finish());
+        classes.insert("B", Rc::clone(&b));
+
+        let mut c = ClassDef::child_of(&b, "C");
+        c.add_method(foo.clone(), dummy_func);
+        c.add_method(baz.clone(), dummy_func);
+
+        let c = Rc::new(c.finish());
+        classes.insert("C", Rc::clone(&c));
+        (a, b, c, foo, foo2, baz, classes)
+    }
+
+    #[test]
+    fn shadowed_by_subtype() {
+        let (a, b, c, foo, foo2, baz, classes) = class_hierarchy();
+        assert_eq!(
+            CallTarget::Static(Rc::clone(&c), foo.clone()),
+            resolve_call_target(&classes, Type::KnownClass(Rc::clone(&c)), foo.clone())
+        );
+    }
+}
+
+#[cfg(test)]
+mod scope_tests {
+    use super::Scope;
+    #[test]
+    fn scope_shadowing() {
+        let mut s1 = Scope::new();
+
+        s1.declare("var1");
+        s1.declare("var2");
+        s1.declare("var3");
+
+        assert_eq!(s1.get_index("var0"), None);
+        assert_eq!(s1.get_index("var1"), Some(0));
+        assert_eq!(s1.get_index("var2"), Some(1));
+        assert_eq!(s1.get_index("var3"), Some(2));
+
+        let mut s2 = s1.shadow();
+
+        s2.declare("var1");
+        s2.declare("var4");
+
+        assert_eq!(s1.get_index("var1"), Some(0));
+        assert_eq!(s1.get_index("var4"), None);
+        assert_eq!(s2.get_index("var1"), Some(3));
+        assert_eq!(s2.get_index("var4"), Some(4));
+
+        drop(s1);
+
+        assert_eq!(s2.get_index("var1"), Some(3));
+        assert_eq!(s2.get_index("var4"), Some(4));
+    }
+
+    #[test]
+    #[should_panic]
+    fn double_declare() {
+        let mut s1 = Scope::new();
+
+        s1.declare("var0");
+        s1.declare("var0");
     }
 }
