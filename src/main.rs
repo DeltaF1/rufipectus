@@ -1379,6 +1379,8 @@ mod method_lookup_tests {
         expect_call_target!(classes, li, c[foo], call_target!(static c[foo]));
         expect_call_target!(classes, li, b[foo], call_target!(static b[foo]));
         expect_call_target!(classes, li, a[foo], call_target!(static a[foo]));
+        expect_call_target!(classes, li, a[foo2], call_target!(static a[foo2]));
+        expect_call_target!(classes, li, c[baz], call_target!(static c[baz]));
     }
 
     #[test]
@@ -1390,7 +1392,7 @@ mod method_lookup_tests {
     }
 
     #[test]
-    fn method_in_parent() {
+    fn method_in_parent_unknown_subtype() {
         let (a, b, c, foo, foo2, baz, classes, li) = class_hierarchy();
         expect_call_target!(classes, li, ?c[foo2], call_target!(static a[foo2]));
         expect_call_target!(classes, li, ?b[foo2], call_target!(static a[foo2]));
@@ -1398,7 +1400,25 @@ mod method_lookup_tests {
     }
 
     #[test]
-    #[should_panic(expected = "Statically determined it's impossible to call baz(_,_,_) for class B")]
+    fn method_in_parent() {
+        let (a, b, c, foo, foo2, baz, classes, li) = class_hierarchy();
+        expect_call_target!(classes, li, c[foo2], call_target!(static a[foo2]));
+        expect_call_target!(classes, li, b[foo2], call_target!(static a[foo2]));
+        expect_call_target!(classes, li, a[foo2], call_target!(static a[foo2]));
+    }
+
+    #[test]
+    fn method_in_descendant() {
+        let (a, b, c, foo, foo2, baz, classes, li) = class_hierarchy();
+        expect_call_target!(classes, li, ?c[baz], call_target!(static c[baz]));
+        expect_call_target!(classes, li, ?b[baz], call_target!(dyn baz));
+        expect_call_target!(classes, li, ?a[baz], call_target!(dyn baz));
+    }
+
+    #[test]
+    #[should_panic(
+        expected = "Statically determined it's impossible to call baz(_,_,_) for class B"
+    )]
     fn unreachable_method() {
         let (a, b, c, foo, foo2, baz, classes, li) = class_hierarchy();
         resolve_call_target(&classes, &li, Type::KnownClass(Rc::clone(&b)), baz.clone());
