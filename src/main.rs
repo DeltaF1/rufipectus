@@ -93,12 +93,8 @@ impl<'a> PartialEq for Type<'a> {
             (Type::Unknown, Type::Unknown) => true,
             (Type::KnownType(b1), Type::KnownType(b2)) => b1 == b2,
             (Type::KnownPrimitive(p1), Type::KnownPrimitive(p2)) => p1 == p2,
-            (Type::KnownClassOrSubtype(c1), Type::KnownClassOrSubtype(c2)) => {
-                std::ptr::eq(c1 as *const _, c2 as *const _)
-            }
-            (Type::KnownClass(c1), Type::KnownClass(c2)) => {
-                std::ptr::eq(c1 as *const _, c2 as *const _)
-            }
+            (Type::KnownClassOrSubtype(c1), Type::KnownClassOrSubtype(c2)) => Rc::ptr_eq(c1, c2),
+            (Type::KnownClass(c1), Type::KnownClass(c2)) => Rc::ptr_eq(c1, c2),
             _ => false,
         }
     }
