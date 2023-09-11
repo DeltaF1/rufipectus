@@ -1237,16 +1237,48 @@ mod type_tests {
     use super::*;
 
     fn test_type_commutative<'a>(a: Type<'a>, b: Type<'a>, expected: Type<'a>) {
-        assert_eq!(a.clone() | b.clone(), expected.clone());
-        assert_eq!(b | a, expected);
+        let first = (a.clone() | b.clone());
+        let second = (b | a);
+        assert_eq!(first, second, "Type was not commutatively or'd");
+        assert_eq!(first, expected);
+    }
+
+    macro_rules! identity {
+        ($type:expr) => {
+            test_type_commutative($type, $type, $type);
+        };
     }
 
     #[test]
     fn same_types() {
-        test_type_commutative(Type::Unknown, Type::Unknown, Type::Unknown);
-        todo!("test cases");
-    }
+        identity!(Type::Unknown);
+        identity!(Type::KnownType(BroadType::Bool));
+        identity!(Type::KnownType(BroadType::Number));
+        identity!(Type::KnownType(BroadType::Object));
+        identity!(Type::KnownType(BroadType::Range));
+        identity!(Type::KnownType(BroadType::String));
 
+        identity!(Type::KnownPrimitive(Primitive::Bool(true)));
+        identity!(Type::KnownPrimitive(Primitive::Bool(false)));
+        identity!(Type::KnownPrimitive(Primitive::Number(1.0)));
+        identity!(Type::KnownPrimitive(Primitive::Number(0.0)));
+        identity!(Type::KnownPrimitive(Primitive::Number(-1.0)));
+        //identity!(Type::KnownPrimitive(Primitive::Number(f64::NAN)));
+        identity!(Type::KnownPrimitive(Primitive::Null));
+
+        let class1 = Rc::new(ClassDef::new("A".into()));
+        let class2 = Rc::new(ClassDef::child_of(&class1, "B").finish());
+
+        identity!(Type::KnownClass(Rc::clone(&class1)));
+        identity!(Type::KnownClass(Rc::clone(&class2)));
+        identity!(Type::KnownClassOrSubtype(Rc::clone(&class1)));
+        identity!(Type::KnownClassOrSubtype(Rc::clone(&class2)));
+    }
+}
+
+#[cfg(test)]
+mod method_lookup_tests {
+    use super::*;
     // A <- B <- C
     // A
     //  - foo(_,_,_)
