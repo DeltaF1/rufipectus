@@ -8,6 +8,7 @@ use std::rc::Rc;
 
 mod ast;
 mod common;
+mod parser;
 
 mod bytecode;
 use ast::{Expression, Signature, Statement};
@@ -795,6 +796,17 @@ where
 }
 
 fn main() {
+    // TODO: Yoke?
+    let s = {
+        let mut f = File::open("test.wren").unwrap();
+        let mut s = String::new();
+        f.read_to_string(&mut s);
+        s
+    };
+
+    let parsed = parser::parse_file(&s);
+
+    dbg!(&parsed);
     let mut globals = Scope::new();
     let mut classes: Vec<Rc<ClassDef>> = vec![];
     let mut Rectangle = ClassBuilder::new("Rectangle");
@@ -999,7 +1011,11 @@ fn main() {
     dbg!(&Square);
     dbg!(&Rectangle);
 
-    // TODO: Generate ast for _start to init classes as classdefs are created
+    assert_eq!(&Square.fields, &parsed.classes["Square"].fields);
+    assert_eq!(&Rectangle.fields, &parsed.classes["Rectangle"].fields);
+
+    //assert_eq!(&Rectangle.methods, &parsed.classes["Rectangle"].methods);
+    //assert_eq!(&Square.methods, &parsed.classes["Square"].methods);
 
     let top_level_ast = Statement::Block(vec![
         Statement::AssignGlobal(
@@ -1021,6 +1037,7 @@ fn main() {
     ]);
 
     dbg!(&top_level_ast);
+    assert_eq!(&top_level_ast, &parsed.top_level_ast);
         }
 
         }
