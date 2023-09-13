@@ -9,7 +9,7 @@ use std::rc::Rc;
 
 use slice_dst::SliceWithHeader;
 
-use crate::CodeAddress;
+use crate::common::CodeAddress;
 
 mod stack;
 mod vm;

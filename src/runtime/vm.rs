@@ -1,16 +1,15 @@
 use crate::bytecode;
 use crate::bytecode::{NativeCall, Op};
+use crate::runtime::CodeAddress;
 use crate::runtime;
 use crate::runtime::SafeFloatToInt;
 use crate::runtime::Value;
-use crate::CodeAddress;
 use std::error::Error;
 
 // TODO: if Op is variable length on-disk, then CodeAddress either needs to point to byte
 // locations, or we need to decode the whole thing into Ops ahead of time
 fn run(code: &[Op], address: CodeAddress) -> Result<Value, Box<dyn Error>> {
     let mut ctx = runtime::ExecutionContext::new(address);
-    let mut i = 0;
     loop {
         let op = &code[ctx.ip as usize];
         ctx.ip += 1;
@@ -129,7 +128,7 @@ fn run(code: &[Op], address: CodeAddress) -> Result<Value, Box<dyn Error>> {
                         ctx.stack.push(c.into());
                     },
                     NativeCall::Unimplemented => panic!("Tried to execute an unimplemented built-in method. This binary may be out-of-date with the bytecode"),
-                    NativeCall::UserDefined(tag) => todo!("User-pluggable native functions")
+                    NativeCall::UserDefined(_tag) => todo!("User-pluggable native functions")
                 }
             }
         }

@@ -1,17 +1,19 @@
 #![deny(unsafe_op_in_unsafe_fn)]
 use std::borrow::Cow;
-use std::cell::Cell;
 use std::collections::{HashMap, HashSet};
 
+use std::fs::File;
+use std::io::Read;
 use std::rc::Rc;
 
+mod ast;
+mod common;
+
 mod bytecode;
+use ast::{Expression, Signature, Statement};
 use bytecode::Assembler;
-use bytecode::Lookup;
 
 mod runtime;
-
-type CodeAddress = u32;
 
 #[derive(Debug, Default)]
 struct InitializedOrderedSet<T> {
@@ -68,21 +70,12 @@ where
     }
 }
 
-#[derive(PartialEq, Debug, Clone)]
-enum Primitive {
-    Bool(bool),
-    Number(f64),
-    String(*const [u8]),
-    Range(isize, isize, bool),
-    Null,
-}
-
 #[derive(Default, Debug, Clone)]
 enum Type<'a> {
     #[default]
     Unknown,
     KnownType(BroadType),
-    KnownPrimitive(Primitive),
+    KnownPrimitive(ast::Primitive),
     KnownClassOrSubtype(Rc<ClassDef<'a>>),
     KnownClass(Rc<ClassDef<'a>>), // Only possible to glean from constructors
 }
@@ -112,6 +105,7 @@ impl Type<'_> {
     }
 
     fn truthiness(&self) -> Option<bool> {
+        use ast::Primitive;
         match self {
             Type::Unknown => None,
             Type::KnownType(_) => Some(true),
@@ -132,6 +126,7 @@ impl<'text> BitOr<Type<'text>> for Type<'text> {
     type Output = Type<'text>;
 
     fn bitor(self, other: Type<'text>) -> <Self as BitOr<Type<'text>>>::Output {
+        use ast::Primitive;
         if self == other {
             return self;
         }
@@ -215,14 +210,14 @@ enum BroadType {
     Range,
 }
 
-impl From<&Primitive> for BroadType {
-    fn from(p: &Primitive) -> BroadType {
+impl From<&ast::Primitive> for BroadType {
+    fn from(p: &ast::Primitive) -> BroadType {
         match p {
-            Primitive::Bool(_) => BroadType::Bool,
-            Primitive::String(_) => BroadType::String,
-            Primitive::Number(_) => BroadType::Number,
-            Primitive::Range(..) => BroadType::Range,
-            Primitive::Null => panic!(),
+            ast::Primitive::Bool(_) => BroadType::Bool,
+            ast::Primitive::String(_) => BroadType::String,
+            ast::Primitive::Number(_) => BroadType::Number,
+            ast::Primitive::Range(..) => BroadType::Range,
+            ast::Primitive::Null => panic!(),
         }
     }
 }
@@ -247,12 +242,6 @@ impl Arity {
             Func(n) => *n,
         }
     }
-}
-
-#[derive(PartialEq, Eq, Hash, Debug, Clone)]
-struct Signature<'a> {
-    name: Cow<'a, str>,
-    arity: Arity,
 }
 
 impl std::fmt::Display for Arity {
@@ -296,57 +285,6 @@ impl std::fmt::Display for Arity {
     }
 }
 
-impl std::fmt::Display for Signature<'_> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> Result<(), std::fmt::Error> {
-        write!(f, "{}{}", self.name, self.arity)
-    }
-}
-
-impl<'a> From<&'a str> for Signature<'a> {
-    fn from(name: &'a str) -> Signature {
-        Signature {
-            name: name.into(),
-            arity: Arity::Func(0),
-        }
-    }
-}
-
-impl<'a> Signature<'a> {
-    pub fn getter(name: &'a str) -> Self {
-        Signature {
-            name: name.into(),
-            arity: Arity::Getter,
-        }
-    }
-
-    pub fn setter(name: &'a str) -> Self {
-        Signature {
-            name: name.into(),
-            arity: Arity::Setter,
-        }
-    }
-
-    pub fn func(name: &'a str, n: usize) -> Self {
-        Signature {
-            name: name.into(),
-            arity: Arity::Func(n),
-        }
-    }
-}
-
-impl Signature<'_> {
-    /*
-    pub fn parse(name: &'static str) -> Self {
-        if name.contains("=") {
-            Signature::setter(name)
-        } else if !name.contains("(") {
-            Signature::getter(name)
-        } else {
-            Signature::func(name, name.count(",") + !name.contains("()"))
-        }
-    }
-    */
-}
 #[derive(Default, Debug)]
 struct ClassBuilder<'a> {
     class: ClassDef<'a>,
@@ -355,19 +293,21 @@ struct ClassBuilder<'a> {
     static_fields: InitializedOrderedSet<&'a str>,
 }
 
+#[derive(PartialEq, Debug)]
 struct MethodAst<'a> {
     ast: Statement<'a>,
 }
 
-#[derive(Default)]
+#[derive(Default, Debug)]
 struct ClassDef<'text> {
     name: Cow<'text, str>,
     // TODO: Rc<ClassDef<'text>>
     parent: Option<Rc<ClassDef<'text>>>,
     fields: Vec<&'text str>,
-    methods: HashMap<Signature<'text>, Cell<MethodAst<'text>>>,
+    methods: HashMap<Signature<'text>, MethodAst<'text>>,
 }
 
+/*
 impl std::fmt::Debug for ClassDef<'_> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> Result<(), std::fmt::Error> {
         let un_celled = self
@@ -393,11 +333,13 @@ impl std::fmt::Debug for ClassDef<'_> {
     }
 }
 
+
 impl std::fmt::Debug for &MethodAst<'_> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> Result<(), std::fmt::Error> {
         write!(f, "Method: {:?}", self.ast)
     }
 }
+*/
 
 impl<'a> ClassDef<'a> {
     fn new(name: Cow<'a, str>) -> Self {
@@ -448,11 +390,11 @@ impl<'a> ClassDef<'a> {
             .map(|existing| existing + self.num_parent_fields())
     }
 
-    pub fn find_method<'b>(&'b self, sig: &Signature<'a>) -> Option<&'b Cell<MethodAst<'a>>> {
+    pub fn find_method<'b>(&'b self, sig: &Signature<'a>) -> Option<&'b MethodAst<'a>> {
         let mut next = Some(self);
         while let Some(cls) = next {
-            if let Some(cell) = cls.methods.get(sig) {
-                return Some(cell);
+            if let Some(method) = cls.methods.get(sig) {
+                return Some(method);
             }
             next = cls.parent.as_deref();
         }
@@ -531,11 +473,7 @@ impl<'a> ClassBuilder<'a> {
        }
     }
     */
-    pub fn add_constructor<F>(&mut self, sig: Signature<'a>, f: F) -> &Cell<MethodAst<'a>>
-    where
-        F: Fn(&mut Self) -> MethodAst<'a>,
-    {
-        // TODO: How to add a type hint at this point in the process?
+    pub fn add_constructor(&mut self, sig: Signature<'a>, body: MethodAst<'a>) -> &MethodAst<'a> {
         let asm = {
             let mut assembler = Assembler::new();
             assembler.emit_op(bytecode::Op::ReadField(
@@ -553,16 +491,26 @@ impl<'a> ClassBuilder<'a> {
             }
             .into(),
         );
+
         let init_sig = Signature {
             name: sig.name.to_owned() + " init",
             arity: sig.arity,
         };
-        self.add_method(init_sig, f)
+
+        self.add_method(init_sig, body)
     }
 
-    pub fn add_static_method<F>(&mut self, sig: Signature<'a>, f: F) -> &Cell<MethodAst<'a>>
+    pub fn add_constructor_with<F>(&mut self, sig: Signature<'a>, mut f: F) -> &MethodAst<'a>
     where
-        F: Fn(&mut Self) -> MethodAst<'a>,
+        F: FnMut(&mut Self) -> MethodAst<'a>,
+    {
+        let body = f(self).into();
+        self.add_constructor(sig, body)
+    }
+
+    pub fn add_static_method<F>(&mut self, sig: Signature<'a>, mut f: F) -> &MethodAst<'a>
+    where
+        F: FnMut(&mut Self) -> MethodAst<'a>,
     {
         // This is necessary because the .get gets confused about the borrow otherwise
         #[allow(clippy::map_entry)]
@@ -573,23 +521,26 @@ impl<'a> ClassBuilder<'a> {
         self.meta_class.methods.get(&sig).unwrap()
     }
 
-    pub fn add_method<F>(&mut self, name: Signature<'a>, f: F) -> &Cell<MethodAst<'a>>
+    pub fn add_method(&mut self, sig: Signature<'a>, body: MethodAst<'a>) -> &MethodAst<'a> {
+        self.class.methods.insert(sig.clone(), body.into());
+        self.class.methods.get(&sig).unwrap()
+    }
+
+    pub fn add_method_with<F>(&mut self, sig: Signature<'a>, mut f: F) -> &MethodAst<'a>
     where
-        F: Fn(&mut Self) -> MethodAst<'a>,
+        F: FnMut(&mut Self) -> MethodAst<'a>,
     {
-        // This is necessary because the .get gets confused about the borrow otherwise
-        #[allow(clippy::map_entry)]
-        if !self.class.methods.contains_key(&name) {
-            let cell = f(self).into();
-            self.class.methods.insert(name.clone(), cell);
-        }
-        self.class.methods.get(&name).unwrap()
+        let body = f(self).into();
+        self.add_method(sig, body)
     }
 
     pub fn finish(self) -> ClassDef<'a> {
         let mut class = self.class;
         let mut meta_class = self.meta_class;
-        class.fields = self.fields.validate().unwrap();
+        class.fields = self
+            .fields
+            .validate()
+            .expect("A field was never written to!");
         // TODO: Result type
         // panic!("Field {field} in class {} is never written to!", self.class.name)
 
@@ -599,107 +550,7 @@ impl<'a> ClassBuilder<'a> {
     }
 }
 
-/*
- class Rectangle {
-   width { _width }
-   height { _height }
-   construct new (width, height) {
-       _width = width
-       _height = height
-   }
-   area() {
-       return _width * _height
-   }
- }
-
- class Square is Rectangle {
-   construct new (width) {
-        __classname = "Square"
-        super(width, width)
-   }
-
-   hello {
-        print("hello from%(__classname)")
-   }
-
-   foo { height }
- }
-
- var s = Square.new(10)
- s.hello
-*/
-
-#[deprecated]
-#[derive(Debug)]
-enum Ast<'a> {
-    Statement(Statement<'a>),
-    Expression(Expression<'a>),
-}
-
-// TODO: Expression statement
-#[derive(Debug)]
-enum Statement<'a> {
-    WriteField(usize, Box<Expression<'a>>),
-    AssignLocal(usize, Box<Expression<'a>>),
-    AssignGlobal(usize, Box<Expression<'a>>),
-    If(Box<Expression<'a>>, IfBody<'a>),
-    Block(Vec<Statement<'a>>),
-    Return(Expression<'a>),
-    ExprStatement(Expression<'a>),
-}
-
-#[derive(Debug)]
-enum Expression<'a> {
-    Call(Box<Expression<'a>>, AstSig<'a>),
-    ThisCall(AstSig<'a>),
-    SuperCall(AstSig<'a>),
-    ReadField(usize),
-    ReadStatic(usize),
-    GlobalLookup(usize),
-    ArgLookup(usize),
-    LocalLookup(usize),
-    Ternary(
-        Box<Expression<'a>>,
-        Box<Expression<'a>>,
-        Box<Expression<'a>>,
-    ),
-    Primitive(Primitive),
-    InlineAsm(Vec<Expression<'a>>, bytecode::Section<'a>),
-}
-
-#[derive(Debug)]
-enum IfBody<'a> {
-    ThenElse {
-        then: Box<Statement<'a>>,
-        r#else: Box<Statement<'a>>,
-    },
-    Then {
-        then: Box<Statement<'a>>,
-    },
-    ThenElseIf {
-        then: Box<Statement<'a>>,
-        elseif: (Box<Expression<'a>>, Box<IfBody<'a>>),
-    },
-}
-
-#[derive(Debug)]
-enum AstSig<'a> {
-    Getter(Cow<'a, str>),
-    Setter(Cow<'a, str>, Box<Expression<'a>>),
-    Func(Cow<'a, str>, Vec<Expression<'a>>),
-}
-
-impl<'a> From<&'a AstSig<'_>> for Signature<'a> {
-    fn from(other: &'a AstSig) -> Self {
-        match other {
-            AstSig::Getter(s) => Signature::getter(s),
-            AstSig::Setter(s, _) => Signature::setter(s),
-            AstSig::Func(s, v) => Signature::func(s, v.len()),
-        }
-    }
-}
-
-#[derive(Default, Clone)]
+#[derive(Default, Clone, Debug)]
 struct Scope<'text> {
     shadowed: Option<Vec<&'text str>>,
     names: Vec<&'text str>,
@@ -742,6 +593,10 @@ impl<'text> Scope<'text> {
     fn contains(&self, name: &'text str) -> bool {
         self.names.contains(&name)
     }
+
+    fn len(&self) -> usize {
+        self.names.len() + self.shadowed.as_ref().map(Vec::len).unwrap_or(0)
+    }
 }
 
 #[derive(Debug)]
@@ -755,6 +610,8 @@ impl<'text> PartialEq for ClassMethodPair<'text> {
 }
 
 use std::hash::Hash;
+
+use crate::ast::AstSig;
 impl Hash for ClassMethodPair<'_> {
     fn hash<H>(&self, h: &mut H)
     where
@@ -933,6 +790,7 @@ where
         | Expression::GlobalLookup(_)
         | Expression::LocalLookup(_) => Type::Unknown,
         Expression::InlineAsm(_, _) => Type::Unknown,
+        Expression::This => Type::KnownClassOrSubtype(Rc::clone(this_type.unwrap())),
     }
 }
 
@@ -941,7 +799,7 @@ fn main() {
     let mut classes: Vec<Rc<ClassDef>> = vec![];
     let mut Rectangle = ClassBuilder::new("Rectangle");
 
-    Rectangle.add_method(Signature::getter("width"), |class| {
+    Rectangle.add_method_with(Signature::getter("width"), |class| {
         dbg!(class.read_field("_width"));
         MethodAst {
             ast: Statement::Return(Expression::ReadField(class.read_field("_width"))),
@@ -955,7 +813,7 @@ fn main() {
     bytecode.finish_function();
     */
 
-    Rectangle.add_method(Signature::getter("height"), |class| {
+    Rectangle.add_method_with(Signature::getter("height"), |class| {
         dbg!(class.read_field("_height"));
         MethodAst {
             ast: Statement::Return(Expression::ReadField(class.read_field("_height"))),
@@ -970,22 +828,29 @@ fn main() {
     });
 
     // TODO: add_constructor
-    Rectangle.add_method(Signature::func("new init", 2), |class| {
-        dbg!(class.write_field("_width"));
-        dbg!(class.write_field("_height"));
-        MethodAst {
-            ast: Statement::Block(vec![
-                Statement::WriteField(
-                    class.write_field("_width"),
-                    Box::new(Expression::ArgLookup(0)),
-                ),
-                Statement::WriteField(
-                    class.write_field("_height"),
-                    Box::new(Expression::ArgLookup(1)),
-                ),
-            ]),
-        }
-    });
+    Rectangle.add_constructor_with(
+        Signature::func("new", 2 /*vec!["width", "height"]*/),
+        |class /*method*/| {
+            dbg!(class.write_field("_width"));
+            dbg!(class.write_field("_height"));
+            MethodAst {
+                ast: Statement::Block(vec![
+                    Statement::WriteField(
+                        class.write_field("_width"),
+                        Box::new(
+                            /*method.lookup_name("width")*/ Expression::ArgLookup(0),
+                        ),
+                    ),
+                    Statement::WriteField(
+                        class.write_field("_height"),
+                        Box::new(
+                            /*method.lookup_name("height")*/ Expression::ArgLookup(1),
+                        ),
+                    ),
+                ]),
+            }
+        },
+    );
     /*
     // wrapper for
     // bytecode.emit(
@@ -998,7 +863,7 @@ fn main() {
     bytecode.finish_function();
 
     */
-    Rectangle.add_method(Signature::func("area", 0), |class| {
+    Rectangle.add_method_with(Signature::func("area", 0), |class| {
         dbg!(class.read_field("_width"));
         dbg!(class.read_field("_height"));
 
@@ -1043,14 +908,13 @@ fn main() {
     // TODO: Creates a static method called "new" with auto-generated constructor code,
     // and an instance method called "new init". The
     // space makes it uncallable by normal code
-    Square.add_constructor(Signature::func("new", 1), |class| {
+    Square.add_constructor_with(Signature::func("new", 1), |class| {
         /*
         bytecode.emit(ByteCode::PushConst("Square"));
         bytecode.emit(ByteCode::StoreStatic(Square.static_field("__classname")));
         bytecode.emit(ByteCode::LoadArg(0));
         bytecode.emit(ByteCode::LoadArg(0));
         */
-        dbg!(class.write_static_field("__classname"));
         let sig = Signature::func("new init", 2);
         let parent = &class.class.parent;
         if let Some(index) = &parent.as_ref().and_then(|p| p.find_method(&sig)) {
@@ -1061,16 +925,22 @@ fn main() {
             panic!("Can't call super here: no such method {sig} in parent");
         }
         MethodAst {
-            ast: Statement::Return(Expression::SuperCall(AstSig::Func(
-                "new".into(),
-                vec![Expression::ArgLookup(0), Expression::ArgLookup(0)],
-            ))),
+            ast: Statement::Block(vec![
+                Statement::WriteStaticField(
+                    class.write_static_field("__classname"),
+                    Box::new(Expression::Primitive(ast::Primitive::String(0))),
+                ),
+                Statement::ExprStatement(Expression::SuperCall(AstSig::Func(
+                    "new".into(),
+                    vec![Expression::ArgLookup(0), Expression::ArgLookup(0)],
+                ))),
+            ]),
         }
     });
     /*
     bytecode.finish_function();
     */
-    Square.add_method(Signature::getter("hello"), |class| {
+    Square.add_method_with(Signature::getter("hello"), |class| {
         dbg!(class.read_static_field("__classname"));
         MethodAst {
             ast: Statement::Return(Expression::Call(
@@ -1090,7 +960,7 @@ fn main() {
             bytecode.finish_function();
         */
     });
-    Square.add_method(Signature::getter("foo"), |class| {
+    Square.add_method_with(Signature::getter("foo"), |class| {
         MethodAst {
             ast: Statement::Return(Expression::ThisCall(AstSig::Getter("height".into()))),
         }
@@ -1138,7 +1008,10 @@ fn main() {
                 Box::new(Expression::GlobalLookup(
                     globals.get_index("Square").unwrap(),
                 )),
-                AstSig::Func("new".into(), vec![]),
+                AstSig::Func(
+                    "new".into(),
+                    vec![Expression::Primitive(ast::Primitive::Number(10.0))],
+                ),
             )),
         ),
         Statement::ExprStatement(Expression::Call(
@@ -1251,6 +1124,7 @@ mod type_tests {
 
     #[test]
     fn same_types() {
+        use ast::Primitive;
         identity!(Type::Unknown);
         identity!(Type::KnownType(BroadType::Bool));
         identity!(Type::KnownType(BroadType::Number));
@@ -1303,25 +1177,25 @@ mod method_lookup_tests {
         let baz = Signature::func("baz", 3);
         fn dummy_func<'text>(_: &mut ClassBuilder<'text>) -> MethodAst<'static> {
             MethodAst {
-                ast: Statement::Return(Expression::Primitive(Primitive::Null)),
+                ast: Statement::Return(Expression::Primitive(ast::Primitive::Null)),
             }
         }
         let mut classes = HashMap::new();
 
         let mut a = ClassBuilder::new("A");
-        a.add_method(foo.clone(), dummy_func);
-        a.add_method(foo2.clone(), dummy_func);
+        a.add_method_with(foo.clone(), dummy_func);
+        a.add_method_with(foo2.clone(), dummy_func);
         let a = Rc::new(a.finish());
         classes.insert("A", Rc::clone(&a));
 
         let mut b = ClassDef::child_of(&a, "B");
-        b.add_method(foo.clone(), dummy_func);
+        b.add_method_with(foo.clone(), dummy_func);
         let b = Rc::new(b.finish());
         classes.insert("B", Rc::clone(&b));
 
         let mut c = ClassDef::child_of(&b, "C");
-        c.add_method(foo.clone(), dummy_func);
-        c.add_method(baz.clone(), dummy_func);
+        c.add_method_with(foo.clone(), dummy_func);
+        c.add_method_with(baz.clone(), dummy_func);
 
         let c = Rc::new(c.finish());
         classes.insert("C", Rc::clone(&c));

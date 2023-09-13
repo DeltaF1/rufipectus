@@ -1,5 +1,5 @@
+use crate::runtime::CodeAddress;
 use crate::runtime::Value;
-use crate::CodeAddress;
 use std::error::Error;
 
 #[derive(Debug)]

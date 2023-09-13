@@ -1,12 +1,7 @@
+use crate::common::{CodeAddress, StringAddress};
 use crate::Arity;
-use crate::CodeAddress;
 use std::borrow::Cow;
 use std::collections::HashMap;
-
-use std::borrow::Borrow;
-
-#[derive(Debug)]
-struct StringAddress {}
 
 #[derive(Debug)]
 pub struct Signature {
@@ -263,6 +258,12 @@ enum AssemblerNode<'a> {
 #[derive(Debug)]
 pub struct Section<'a> {
     node: AssemblerNode<'a>,
+}
+
+impl PartialEq for Section<'_> {
+    fn eq(&self, _: &Section<'_>) -> bool {
+        false
+    }
 }
 
 impl<'text> AssemblerNode<'text> {
