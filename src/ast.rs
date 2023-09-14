@@ -123,12 +123,12 @@ pub enum AstSig<'a> {
     Func(Cow<'a, str>, Vec<Expression<'a>>),
 }
 
-impl<'a> From<&'a AstSig<'_>> for Signature<'a> {
-    fn from(other: &'a AstSig) -> Self {
+impl<'a> From<&AstSig<'a>> for Signature<'a> {
+    fn from(other: &AstSig<'a>) -> Self {
         match other {
-            AstSig::Getter(s) => Signature::getter(s),
-            AstSig::Setter(s, _) => Signature::setter(s),
-            AstSig::Func(s, v) => Signature::func(s, v.len()),
+            AstSig::Getter(s) => Signature::getter(s.clone()),
+            AstSig::Setter(s, _) => Signature::setter(s.clone()),
+            AstSig::Func(s, v) => Signature::func(s.clone(), v.len()),
         }
     }
 }
