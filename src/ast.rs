@@ -1,6 +1,6 @@
-use std::borrow::Cow;
+use std::{borrow::Cow, rc::Rc};
 
-use crate::{common::StringAddress, Arity};
+use crate::{common::StringAddress, Arity, ClassRef};
 
 #[derive(PartialEq, Debug, Clone)]
 pub enum Primitive {
@@ -33,21 +33,21 @@ impl<'a> From<&'a str> for Signature<'a> {
 }
 
 impl<'a> Signature<'a> {
-    pub fn getter(name: &'a str) -> Self {
+    pub fn getter<T: Into<Cow<'a, str>>>(name: T) -> Self {
         Signature {
             name: name.into(),
             arity: Arity::Getter,
         }
     }
 
-    pub fn setter(name: &'a str) -> Self {
+    pub fn setter<T: Into<Cow<'a, str>>>(name: T) -> Self {
         Signature {
             name: name.into(),
             arity: Arity::Setter,
         }
     }
 
-    pub fn func(name: &'a str, n: usize) -> Self {
+    pub fn func<T: Into<Cow<'a, str>>>(name: T, n: usize) -> Self {
         Signature {
             name: name.into(),
             arity: Arity::Func(n),
