@@ -3,17 +3,23 @@ use crate::Arity;
 use std::borrow::Cow;
 use std::collections::HashMap;
 
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy)]
 pub struct Signature {
     name: StringAddress,
-    arity: Arity,
 }
 
-#[derive(Debug)]
+impl From<StringAddress> for Signature {
+    fn from(value: StringAddress) -> Self {
+        Signature { name: value }
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
 #[non_exhaustive]
 pub enum Primitive {
     Number(f64),
     Boolean(bool),
+    String(StringAddress),
     Null,
 }
 
@@ -23,7 +29,7 @@ impl From<i32> for Primitive {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy)]
 #[repr(u32)]
 pub enum NativeCall {
     NewObject = 0,
@@ -38,6 +44,10 @@ pub enum NativeCall {
 impl NativeCall {
     fn is_built_in(&self) -> bool {
         !matches!(self, NativeCall::UserDefined(_))
+    }
+
+    fn discriminant(&self) -> u32 {
+        unsafe { (self as *const NativeCall as *const u32).read() }
     }
 }
 
@@ -64,7 +74,7 @@ impl From<NativeCallNumber> for NativeCall {
 }
 */
 
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy)]
 pub enum Op {
     Dup,
     Pop,
@@ -110,6 +120,7 @@ const fn opcode(op: &Op) -> u8 {
             Primitive::Null => 0x10,
             Primitive::Number(_) => 0x11,
             Primitive::Boolean(_) => 0x12,
+            Primitive::String(_) => 0x13,
         },
         PushThis => 0x18,
         PopThis => 0x19,
@@ -126,12 +137,19 @@ const fn opcode(op: &Op) -> u8 {
 }
 
 impl Op {
-    fn len(&self) -> usize {
-        use Op::*;
+    pub fn len(&self) -> usize {
         match self {
-            PushPrimitive(_) => 9,
-            CallDirect(_, _) => 9,
-            Jump(_) => 5,
+            // TODO: Length dependent on primitive type
+            Op::PushPrimitive(_) => 9,
+            Op::CallDirect(_, _) => 9,
+            Op::PushArg(_)
+            | Op::ReadField(_)
+            | Op::CallNamed(_)
+            | Op::WriteField(_)
+            | Op::PopIntoGlobal(_)
+            | Op::PushGlobal(_) => 5,
+            Op::Jump(_) => 5,
+            Op::NativeCall(_) => 5,
             _ => 1,
         }
     }
@@ -145,10 +163,12 @@ impl Op {
         let len = output.len();
         output.push(opcode(self));
         match self {
+            // TODO: Save space here
             PushPrimitive(prim) => match prim {
                 Primitive::Number(f) => output.extend_from_slice(&f.to_le_bytes()),
-                Primitive::Boolean(b) => output.extend_from_slice(&(*b as u32).to_le_bytes()),
+                Primitive::Boolean(b) => output.extend_from_slice(&(*b as u64).to_le_bytes()),
                 Primitive::Null => output.extend_from_slice(&0u64.to_le_bytes()),
+                Primitive::String(addr) => output.extend_from_slice(&(*addr as u64).to_le_bytes()),
             },
             CallDirect(arity, address) => {
                 let arity: u32 = (*arity).try_into().unwrap();
@@ -156,16 +176,83 @@ impl Op {
                 output.extend_from_slice(&address.to_le_bytes());
             }
             Jump(offset) => output.extend_from_slice(&offset.to_le_bytes()),
-            Yield | Pop | Ret => {}
+            PushArg(n) | ReadField(n) | WriteField(n) | PopIntoGlobal(n) | PushGlobal(n) => {
+                output.extend_from_slice(&(u32::try_from(*n).unwrap()).to_le_bytes())
+            }
+            CallNamed(sig) => output.extend_from_slice(&sig.name.to_le_bytes()),
+            NativeCall(native) => output.extend_from_slice(&native.discriminant().to_le_bytes()),
+            Yield | Pop | Ret | PopThis | PushThis | Dup => {}
             x => todo!("Serialize {x:?}"),
         }
         assert_eq!(output.len(), len + self.len());
+    }
+
+    pub fn deserialize<I: Iterator<Item = u8>>(i: &mut I) -> Option<Op> {
+        macro_rules! read_u32 {
+            ($iter:ident) => {
+                u32::from_le_bytes([$iter.next()?, $iter.next()?, $iter.next()?, $iter.next()?])
+            };
+        }
+
+        macro_rules! read_u64 {
+            ($iter:ident) => {
+                u64::from_le_bytes([
+                    $iter.next()?,
+                    $iter.next()?,
+                    $iter.next()?,
+                    $iter.next()?,
+                    $iter.next()?,
+                    $iter.next()?,
+                    $iter.next()?,
+                    $iter.next()?,
+                ])
+            };
+        }
+
+        let opcode = i.next()?;
+        Some(match opcode {
+            0 => Op::Dup,
+            1 => Op::Pop,
+            2 => Op::Peek(read_u32!(i) as usize),
+            3 => Op::ReadField(read_u32!(i) as usize),
+            4 => Op::WriteField(read_u32!(i) as usize),
+            5 => Op::PushArg(read_u32!(i) as usize),
+            6 => Op::PushLocal(read_u32!(i) as usize),
+            7 => Op::PopIntoLocal(read_u32!(i) as usize),
+            8 => Op::PushGlobal(read_u32!(i) as usize),
+            9 => Op::PopIntoGlobal(read_u32!(i) as usize),
+            0x10..=0x17 => Op::PushPrimitive(match opcode & 0x07 {
+                0 => Primitive::Null,
+                1 => Primitive::Number(f64::from_bits(read_u64!(i))),
+                2 => Primitive::Boolean(match read_u64!(i) {
+                    0 => false,
+                    1 => true,
+                    _ => panic!(),
+                }),
+                3 => Primitive::String(read_u64!(i) as u32),
+                _ => unreachable!(),
+            }),
+            0x18 => Op::PushThis,
+            0x19 => Op::PopThis,
+            0x1a => Op::Jump(read_u32!(i) as i32),
+            0x1b => Op::JumpIf(read_u32!(i) as i32),
+            0x1c => Op::CallDirect(read_u32!(i) as usize, read_u32!(i) as CodeAddress),
+            0x1d => Op::CallNamed((read_u32!(i) as StringAddress).into()),
+            0x1e => Op::Ret,
+            0x1f => Op::RetNull,
+            0x20 => Op::Yield,
+            0x21 => Op::YieldNull,
+            0x22 => Op::NativeCall(todo!()),
+            _ => panic!("No opcode for byte {opcode}"),
+        })
     }
 }
 
 #[derive(Debug)]
 pub struct Binary {
-    bytes: Vec<u8>,
+    pub bytes: Vec<u8>,
+    pub start: CodeAddress,
+    pub strings: Vec<Box<[u8]>>,
 }
 /*
 TODO: Add more to Binary
@@ -183,7 +270,7 @@ pub struct Binary {
 
 // TODO: Allow opcodes to be the result of a compile-time calculation? Probably overkill
 #[non_exhaustive]
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 enum VariableOp<'a> {
     Jump(Lookup<'a>),
     JumpIf(Lookup<'a>),
@@ -209,7 +296,7 @@ impl<'a> From<VariableOp<'a>> for AssemblerNode<'a> {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 enum AssemblerOp<'a> {
     StaticallyKnown(Op),
     Variable(VariableOp<'a>),
@@ -222,7 +309,7 @@ impl From<Op> for AssemblerOp<'_> {
 }
 
 #[derive(Debug)]
-enum AssemblerAddress<'a> {
+pub enum AssemblerAddress<'a> {
     Known(CodeAddress),
     Lookup(Lookup<'a>),
 }
@@ -251,14 +338,14 @@ impl<'a> From<Lookup<'a>> for AssemblerOffset<'a> {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 enum AssemblerNode<'a> {
     Section(Cow<'a, str>, Vec<AssemblerNode<'a>>),
     Label(Cow<'a, str>),
     Op(AssemblerOp<'a>),
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Section<'a> {
     node: AssemblerNode<'a>,
 }
@@ -363,6 +450,13 @@ impl<'text> Assembler<'text> {
         }
     }
 
+    pub fn add_ops(&mut self, ops: &[Op]) {
+        self.current_section().get_vec_mut().extend(
+            ops.iter()
+                .map(|o| AssemblerNode::Op(AssemblerOp::StaticallyKnown(*o))),
+        );
+    }
+
     fn current_section(&mut self) -> &mut AssemblerNode<'text> {
         self.borrow_section_mut(Lookup::Absolute(
             self.current_path.iter().map(|s| (*s).clone()).collect(),
@@ -397,7 +491,7 @@ impl<'text> Assembler<'text> {
         section.push(AssemblerNode::Label(name))
     }
 
-    fn emit_call(&mut self, n: usize, address: AssemblerAddress<'text>) {
+    pub fn emit_call(&mut self, n: usize, address: AssemblerAddress<'text>) {
         match address {
             AssemblerAddress::Known(addr) => self.emit_op(Op::CallDirect(n, addr)),
             AssemblerAddress::Lookup(lookup) => {
@@ -587,6 +681,11 @@ impl<'text> Assembler<'text> {
             }),
             IntermediateState::Complete(assembly) => Ok(Binary {
                 bytes: assembly.generated.clone(),
+                start: self.address_of_label(&["_start"]).unwrap_or_else(|()| {
+                    dbg!("Warning: Assembled without _start, returning 0");
+                    0
+                }),
+                strings: vec![],
             }),
             IntermediateState::Dirty => unreachable!(),
         }
@@ -652,16 +751,24 @@ impl<'text> Assembler<'text> {
     }
 
     pub fn insert_tree(&mut self, path: Lookup<'text>, tree: Section<'text>) {
-        let path = path.resolve(&self.current_path);
-        todo!("Unwrap and insert the section into our tree")
+        //let path = path.resolve(&self.current_path);
+        let node = tree.node;
+        if let AssemblerNode::Section(_, v) = self.borrow_section_mut(path) {
+            v.push(node)
+        } else {
+            unreachable!()
+        }
     }
 
     fn address_of_label<'a, S>(&mut self, name: &'a [S]) -> Result<CodeAddress, ()>
     where
         S: Into<Cow<'a, str>> + Clone,
     {
-        Ok(self.get_or_generate()?.labels
-            [&name.iter().map(|s| (*s).clone().into()).collect::<Vec<_>>()])
+        self.get_or_generate()?
+            .labels
+            .get(&name.iter().map(|s| (*s).clone().into()).collect::<Vec<_>>())
+            .cloned()
+            .ok_or(())
     }
 }
 

@@ -1,19 +1,19 @@
-use crate::bytecode;
+use crate::bytecode::{self, Binary};
 use crate::bytecode::{NativeCall, Op};
-use crate::runtime::CodeAddress;
 use crate::runtime;
+use crate::runtime::CodeAddress;
 use crate::runtime::SafeFloatToInt;
 use crate::runtime::Value;
 use std::error::Error;
 
-// TODO: if Op is variable length on-disk, then CodeAddress either needs to point to byte
-// locations, or we need to decode the whole thing into Ops ahead of time
-fn run(code: &[Op], address: CodeAddress) -> Result<Value, Box<dyn Error>> {
+pub fn run(binary: &Binary, address: CodeAddress) -> Result<Value, Box<dyn Error>> {
     let mut ctx = runtime::ExecutionContext::new(address);
     loop {
-        let op = &code[ctx.ip as usize];
-        ctx.ip += 1;
-        //dbg!(&ctx, op);
+        let mut iter = (binary.bytes[(ctx.ip as usize)..]).iter().copied();
+
+        let op = Op::deserialize(&mut iter).unwrap();
+        ctx.ip += TryInto::<CodeAddress>::try_into(op.len()).unwrap();
+        dbg!(&ctx, op);
         match op {
             Op::Dup => {
                 let top = ctx.stack.top().clone();
@@ -23,7 +23,7 @@ fn run(code: &[Op], address: CodeAddress) -> Result<Value, Box<dyn Error>> {
                 ctx.stack.pop()?;
             }
             Op::Peek(n) => {
-                let peeked = ctx.stack.peek_from_top(*n).clone();
+                let peeked = ctx.stack.peek_from_top(n).clone();
                 ctx.stack.push(peeked);
             }
             Op::ReadField(n) => {
@@ -34,7 +34,7 @@ fn run(code: &[Op], address: CodeAddress) -> Result<Value, Box<dyn Error>> {
                 {
                     Value::Object(ref object_ref) => {
                         let fields = object_ref.borrow_fields();
-                        let value = fields[*n].clone();
+                        let value = fields[n].clone();
                         ctx.stack.push(value);
                     }
                     x => panic!("Tried to read field {n} of non-object {x:?}"),
@@ -49,29 +49,29 @@ fn run(code: &[Op], address: CodeAddress) -> Result<Value, Box<dyn Error>> {
                     Value::Object(ref object_ref) => {
                         let mut fields = object_ref.borrow_fields_mut();
                         let value = ctx.stack.pop()?;
-                        fields[*n] = value;
+                        fields[n] = value;
                     }
                     x => panic!("Tried to write field {n} of non-object {x:?}"),
                 }
             }
             Op::PushArg(n) => {
-                let value = ctx.stack.peek_from_frame(*n).clone();
+                let value = ctx.stack.peek_from_frame(n).clone();
                 ctx.stack.push(value);
             }
             Op::PushLocal(_n) | Op::PopIntoLocal(_n) => todo!("Where are locals stored..."),
             Op::PushGlobal(n) => {
-                ctx.stack.push(unsafe { runtime::GLOBAL_STATE[*n].clone() });
+                ctx.stack.push(unsafe { runtime::GLOBAL_STATE[n].clone() });
             }
             Op::PopIntoGlobal(n) => {
                 let len = unsafe { runtime::GLOBAL_STATE.len() };
 
-                if *n < len {
+                if n < len {
                     unsafe {
-                        runtime::GLOBAL_STATE[*n] = ctx.stack.pop()?;
+                        runtime::GLOBAL_STATE[n] = ctx.stack.pop()?;
                     }
                 } else {
                     unsafe {
-                        runtime::GLOBAL_STATE.resize_with(*n, Value::null);
+                        runtime::GLOBAL_STATE.resize_with(n, Value::null);
                         runtime::GLOBAL_STATE.push(ctx.stack.pop()?);
                     }
                 }
@@ -80,10 +80,13 @@ fn run(code: &[Op], address: CodeAddress) -> Result<Value, Box<dyn Error>> {
                 let value = match primitive {
                     bytecode::Primitive::Null => Value::null(),
                     bytecode::Primitive::Number(f) => {
-                        Value::Primitive(runtime::PrimitiveValue::Number(*f))
+                        Value::Primitive(runtime::PrimitiveValue::Number(f))
                     }
                     bytecode::Primitive::Boolean(b) => {
-                        Value::Primitive(runtime::PrimitiveValue::Boolean(*b))
+                        Value::Primitive(runtime::PrimitiveValue::Boolean(b))
+                    },
+                    bytecode::Primitive::String(n) => {
+                        Value::Primitive(runtime::PrimitiveValue::String(todo!("Fetch bytes from binary")))
                     }
                 };
                 ctx.stack.push(value);
@@ -94,14 +97,14 @@ fn run(code: &[Op], address: CodeAddress) -> Result<Value, Box<dyn Error>> {
                     .expect("Tried to reference this outside of a method"),
             ), // TODO: ok_or NoThisError
             Op::PopThis => ctx.this = Some(ctx.stack.pop()?),
-            Op::Jump(offset) => ctx.ip = ctx.ip.wrapping_add_signed(*offset),
+            Op::Jump(offset) => ctx.ip = ctx.ip.wrapping_add_signed(offset),
             Op::JumpIf(offset) => {
                 let value = ctx.stack.pop()?;
                 if value.truthy() {
-                    ctx.ip = ctx.ip.wrapping_add_signed(*offset)
+                    ctx.ip = ctx.ip.wrapping_add_signed(offset)
                 }
             }
-            Op::CallDirect(arity, address) => ctx.call(*arity, *address),
+            Op::CallDirect(arity, address) => ctx.call(arity, address),
             Op::CallNamed(_signature) => {
                 todo!("Runtime method lookup")
             }
@@ -138,7 +141,7 @@ fn run(code: &[Op], address: CodeAddress) -> Result<Value, Box<dyn Error>> {
 #[cfg(test)]
 mod test {
     use super::*;
-    use crate::runtime::GlobalClassSlots;
+    use crate::{bytecode::Assembler, runtime::GlobalClassSlots};
     #[test]
     fn stack_ops() {
         let code = vec![
@@ -152,8 +155,13 @@ mod test {
             Op::Pop,
             Op::Ret,
         ];
+        let binary = {
+            let mut asm = Assembler::new();
+            asm.add_ops(&code);
+            asm.assemble().unwrap()
+        };
 
-        let output = run(&code, 0).unwrap();
+        let output = run(&binary, 0).unwrap();
         assert_eq!(output, 69.0.into());
     }
 
@@ -323,6 +331,12 @@ mod test {
             Op::Yield,
         ];
 
+        let binary = {
+            let mut asm = Assembler::new();
+            asm.add_ops(&code);
+            asm.assemble().unwrap()
+        };
+
         let start = (51); /* _start */
 
         let (class, object, _) = runtime::bootstrap_class();
@@ -333,7 +347,7 @@ mod test {
             runtime::GLOBAL_STATE[GlobalClassSlots::Class as usize] = class.into();
         }
 
-        let output = run(&code, start);
+        let output = run(&binary, start);
         dbg!(&output);
         assert_eq!(output.unwrap(), 100.0.into());
     }
