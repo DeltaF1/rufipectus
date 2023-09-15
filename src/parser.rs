@@ -309,7 +309,7 @@ impl<'text> CompilerState<'text> {
                                 .expect(&format!("No global named {tok:?}")),
                         )
                     } else {
-                        Expression::ThisCall(self.parse_func_call(i, tok))
+                        Expression::Call(Box::new(Expression::This), self.parse_func_call(i, tok))
                     }
                 }
             }
@@ -403,7 +403,13 @@ impl<'text> CompilerState<'text> {
                 )
             }
             "if" => todo!(), //parse_if(i, ctx),
-            "return" => Statement::Return(self.parse_expr(i)),
+            "return" => {
+                if i.newline_before_next_token() {
+                    Statement::Return(Expression::Primitive(Primitive::Null))
+                } else {
+                    Statement::Return(self.parse_expr(i))
+                }
+            }
             "{" => self.parse_block(i, locals),
             "var" => {
                 let name = peek_next_token(i).unwrap();
@@ -458,7 +464,7 @@ impl<'text> CompilerState<'text> {
                     }
                     Some(NameType::ThisCall) => {
                         let sig: AstSig = self.parse_func_call(i, x);
-                        Statement::ExprStatement(Expression::ThisCall(sig))
+                        Statement::ExprStatement(Expression::Call(Box::new(Expression::This), sig))
                     }
                     Some(NameType::Arg) => unimplemented!("Using arg in statement mode"),
                     None => {

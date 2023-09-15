@@ -84,8 +84,11 @@ pub enum Op {
     CallDirect(usize, CodeAddress),
     CallNamed(Signature),
     Ret,
+    // TODO: Reuse this for ClassOf or something
+    #[deprecated]
     RetNull,
     Yield,
+    #[deprecated]
     YieldNull,
     NativeCall(NativeCall),
 }

@@ -83,6 +83,7 @@ pub enum Statement<'a> {
 
 #[derive(Debug, PartialEq)]
 pub enum Expression<'a> {
+    This,
     Call(Box<Expression<'a>>, AstSig<'a>),
     ThisCall(AstSig<'a>),
     SuperCall(AstSig<'a>),
@@ -98,7 +99,7 @@ pub enum Expression<'a> {
     ),
     Primitive(Primitive),
     InlineAsm(Vec<Expression<'a>>, crate::bytecode::Section<'a>),
-    This,
+    ClassBody(ClassRef<'a>, usize),
 }
 
 #[derive(Debug, PartialEq)]
