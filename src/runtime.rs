@@ -10,36 +10,13 @@ use std::rc::Rc;
 use slice_dst::SliceWithHeader;
 
 use crate::common::CodeAddress;
+use crate::common::GlobalClassSlots;
 
 mod stack;
 mod vm;
 
 pub use stack::ExecutionContext;
-
-// TODO: Put this in common for use by the compiler
-#[repr(usize)]
-enum GlobalClassSlots {
-    /* The cyclical powerhouse */
-    Object = 0,
-    Class,
-
-    /* Primitive classes */
-    Bool,
-    Num,
-    String,
-    Range,
-    Null,
-
-    /* Built-in classes */
-    Sequence,
-    List,
-    Map,
-    Fn,
-    Fiber,
-    System,
-
-    End,
-}
+pub use vm::run;
 
 #[repr(usize)]
 pub(crate) enum ClassStructure {
