@@ -26,6 +26,7 @@ pub struct Module<'text> {
     pub(crate) strings: Vec<&'text str>,
 }
 
+#[derive(Clone)]
 struct StringStream<'text> {
     iter: Peekable<std::iter::Enumerate<std::str::Chars<'text>>>,
     source: &'text str,
@@ -171,47 +172,42 @@ fn next_token<'a>(i: &mut StringStream<'a>) -> Option<&'a str> {
     }
     let end = i.index_maybe().unwrap_or(i.source.len());
     let s = i.get(start, end);
+
+    if s == "/" {
+        let (_, next_char) = i.iter.peek()?;
+        return if next_char == &'/' {
+            println!("Skipping line comment");
+            // Line comment
+            while i.iter.next().map(|(i, c)| c)? != '\n' {}
+            next_token(i)
+        } else if next_char == &'*' {
+            println!("Skipping multi-line comment");
+            // We're parsing a multi-line comment
+            // Drop the "*"
+            next_token(i);
+            loop {
+                let next = next_token(i)?;
+                if next == "*" && i.iter.next().map(|(_, c)| c)? == '/' {
+                    break;
+                }
+            }
+            next_token(i)
+        } else {
+            Some(s)
+        };
+    }
+
     println!("next_token = {s:?}");
     Some(s)
 }
 
 fn peek_next_token<'text>(i: &mut StringStream<'text>) -> Option<&'text str> {
-    let mut start = i.index();
-    let mut iter = (&i.source[start..]).chars().peekable();
-    while iter.peek()?.is_whitespace() {
-        iter.next()?;
-        start += 1;
-    }
-
-    let mut end = start;
-    if !is_word(iter.peek().unwrap()) {
-        iter.next();
-        end += 1;
-    } else {
-        while is_word(iter.peek().unwrap()) {
-            iter.next();
-            end += 1;
-        }
-    }
-
-    // Was unable to parse any token out of this
-    if start == end {
-        return None;
-    }
-
-    let s = i.get(start, end);
-    println!("peek_token = {s:?}");
-    Some(s)
+    let mut i = i.clone();
+    next_token(&mut i)
 }
 
 fn peek_nth_token<'text>(i: &mut StringStream<'text>, n: usize) -> Option<&'text str> {
-    let current = i.index_maybe()?;
-    let mut new_stream = StringStream::from_str(i.source);
-    {
-        if current != 0 {
-            new_stream.iter.nth(current - 1);
-        }
-    }
+    let mut new_stream = i.clone();
 
     for _ in 0..n {
         next_token(&mut new_stream);
@@ -756,5 +752,50 @@ mod test {
 
             assert_eq!(peek_nth_token(stream, 100), None);
         }
+    }
+
+    #[test]
+    fn comments() {
+        let s = r"
+        token1 //Nothing else parsed /* even here */ class whatever
+        token/ * not a real comment */ mismatched closing
+        /*
+            anything can go in here
+            // even this
+         */
+        fin/**/al tokens
+        ";
+        let mut stream = StringStream::from_str(s);
+        let i = &mut stream;
+        assert_eq!(peek_next_token(i), Some("token1"));
+        assert_eq!(next_token(i), Some("token1"));
+        assert_eq!(peek_next_token(i), Some("token"));
+        assert_eq!(next_token(i), Some("token"));
+        assert_eq!(peek_next_token(i), Some("/"));
+        assert_eq!(next_token(i), Some("/"));
+        assert_eq!(peek_next_token(i), Some("*"));
+        assert_eq!(next_token(i), Some("*"));
+        assert_eq!(peek_next_token(i), Some("not"));
+        assert_eq!(next_token(i), Some("not"));
+        assert_eq!(peek_next_token(i), Some("a"));
+        assert_eq!(next_token(i), Some("a"));
+        assert_eq!(peek_next_token(i), Some("real"));
+        assert_eq!(next_token(i), Some("real"));
+        assert_eq!(peek_next_token(i), Some("comment"));
+        assert_eq!(next_token(i), Some("comment"));
+        assert_eq!(peek_next_token(i), Some("*"));
+        assert_eq!(next_token(i), Some("*"));
+        assert_eq!(peek_next_token(i), Some("/"));
+        assert_eq!(next_token(i), Some("/"));
+        assert_eq!(peek_next_token(i), Some("mismatched"));
+        assert_eq!(next_token(i), Some("mismatched"));
+        assert_eq!(peek_next_token(i), Some("closing"));
+        assert_eq!(next_token(i), Some("closing"));
+        assert_eq!(peek_next_token(i), Some("fin"));
+        assert_eq!(next_token(i), Some("fin"));
+        assert_eq!(peek_next_token(i), Some("al"));
+        assert_eq!(next_token(i), Some("al"));
+        assert_eq!(peek_next_token(i), Some("tokens"));
+        assert_eq!(next_token(i), Some("tokens"));
     }
 }
