@@ -11,6 +11,7 @@ use crate::Arity;
 use crate::AstSig;
 use crate::ClassBuilder;
 use crate::ClassDef;
+use crate::ClassRef;
 use crate::MethodAst;
 use crate::Scope;
 use crate::Signature;
@@ -21,7 +22,8 @@ use crate::{Expression, Statement};
 #[derive(Debug)]
 pub struct Module<'text> {
     pub(crate) top_level_ast: Statement<'text>,
-    pub(crate) classes: HashMap<&'text str, Rc<ClassDef<'text>>>,
+    pub(crate) global_classes: HashMap<&'text str, Rc<ClassDef<'text>>>,
+    pub(crate) classes: Vec<Rc<ClassDef<'text>>>,
     pub(crate) globals: Scope<'text>,
     pub(crate) strings: Vec<&'text str>,
 }
@@ -93,7 +95,8 @@ impl<'text> StringStream<'text> {
 pub struct CompilerState<'text> {
     current_class: Option<ClassBuilder<'text>>,
     current_method: Option<MethodContext<'text>>,
-    classes: HashMap<&'text str, Rc<ClassDef<'text>>>,
+    global_classes: HashMap<&'text str, Rc<ClassDef<'text>>>,
+    classes: Vec<Rc<ClassDef<'text>>>,
     globals: Scope<'text>,
     strings: Vec<&'text str>,
 }
@@ -137,6 +140,7 @@ pub fn parse_file<'text>(s: &'text str) -> Module<'text> {
     }
 
     Module {
+        global_classes: state.global_classes,
         classes: state.classes,
         strings: state.strings,
         globals: state.globals,
@@ -360,6 +364,7 @@ impl<'text> CompilerState<'text> {
             "class" => {
                 let name = next_token(i).expect("EOF when parsing class name");
                 let mut class_builder;
+                let mut super_slot = crate::common::GlobalClassSlots::Object as usize;
                 if next_token_is(i, "is").expect("EOF when parsing class declaration") {
                     let super_name = next_token(i).expect("EOF parsing superclass name");
                     // TODO: Defer building class if it's inside another class
@@ -370,7 +375,12 @@ impl<'text> CompilerState<'text> {
                     {
                         panic!("Can't define subclass inside of class definition. This is a limitation of the compiler")
                     }
-                    let super_class = &self.classes[super_name];
+                    // FIXME: Classes can exist outside of global scope
+                    let super_class = &self.global_classes[super_name];
+                    super_slot = locals
+                        .get_index(super_name)
+                        .or_else(|| self.globals.get_index(super_name))
+                        .unwrap();
                     class_builder = ClassDef::child_of(super_class, name);
                 } else {
                     class_builder = ClassBuilder::new(name);
@@ -381,13 +391,15 @@ impl<'text> CompilerState<'text> {
                 self.globals.declare(name);
 
                 let old_class = self.current_class.replace(class_builder);
-                let def = Rc::new(self.parse_class_body(i));
+                let def = self.parse_class_body(i);
                 self.current_class = old_class;
-                self.classes.insert(name, def);
+                self.global_classes.insert(name, Rc::clone(&def));
+                self.classes.push(Rc::clone(&def));
+                self.classes
+                    .push(def.metaclass.as_ref().map(Rc::clone).unwrap());
                 Statement::AssignGlobal(
                     locals.get_index(name).unwrap(),
-                    // Generate AST for creating a class object from a ClassDef
-                    Box::new(Expression::Primitive(Primitive::Null)),
+                    Box::new(Expression::ClassBody(ClassRef(def), super_slot)),
                 )
             }
             "if" => todo!(), //parse_if(i, ctx),
@@ -586,7 +598,7 @@ impl<'text> CompilerState<'text> {
         args.len()
     }
 
-    fn parse_class_body(&mut self, i: &mut StringStream<'text>) -> ClassDef<'text> {
+    fn parse_class_body(&mut self, i: &mut StringStream<'text>) -> Rc<ClassDef<'text>> {
         assert_eq!(next_token(i), Some("{"));
         let ref_self = RefCell::new(self);
         while peek_next_token(i).expect("EOF when parsing class body") != "}" {
