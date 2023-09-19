@@ -757,8 +757,9 @@ impl<'text> PartialEq for ClassMethodPair<'text> {
 
 use std::hash::Hash;
 
-use crate::ast::AstSig;
+use crate::ast::{AstSig, IfBody};
 use crate::common::GlobalClassSlots;
+use crate::parser::Module;
 impl Hash for ClassMethodPair<'_> {
     fn hash<H>(&self, h: &mut H)
     where
@@ -807,17 +808,17 @@ fn generate_latest_implementations<'text>(
             );
         }
     }
+    /*
+        dbg!(latest_implementation
+            .iter()
+            .map(|(k, v)| {
+                let ClassMethodPair(c1, m) = k;
+                let c2 = v;
 
-    dbg!(latest_implementation
-        .iter()
-        .map(|(k, v)| {
-            let ClassMethodPair(c1, m) = k;
-            let c2 = v;
-
-            ((&c1.name, m.to_string()), &c2.name)
-        })
-        .collect::<Vec<_>>());
-
+                ((&c1.name, m.to_string()), &c2.name)
+            })
+            .collect::<Vec<_>>());
+    */
     latest_implementation
 }
 
@@ -950,7 +951,6 @@ impl<'text> TypeDatabase<'text> {
     }
 
     fn query(&mut self, query: Query<'text>) -> Type<'text> {
-        dbg!(&query);
         match self.facts.get(&query) {
             Some(typ) => {
                 if typ == &Type::Bottom {
@@ -965,6 +965,7 @@ impl<'text> TypeDatabase<'text> {
             }
             None => {
                 self.facts.insert(query.clone(), Type::Bottom);
+                self.unresolved_queries.insert(query);
                 Type::Bottom
             }
         }
@@ -1017,6 +1018,9 @@ impl<'a, 'text> Augur<'a, 'text> {
     fn new<T: Into<Vec<&'a Rc<ClassDef<'text>>>>>(classes: T) -> Self {
         let classes = classes.into();
         Augur {
+            // FIXME: Should classes + method_lookups be their own thing? its only ever used in
+            // resolve_call_target which could be a standalone function since it never touches any
+            // part of augur other than these 2 fields
             method_lookups: generate_latest_implementations(&classes),
             classes: classes,
             types: TypeDatabase::new(),
@@ -1025,20 +1029,51 @@ impl<'a, 'text> Augur<'a, 'text> {
         }
     }
 
+    // FIXME: Should this be its own thing that takes a Module or something?
+    fn type_to_class(&mut self, typ: &Type<'text>) -> Option<Rc<ClassDef<'text>>> {
+        match typ {
+            Type::Unknown | Type::Bottom => None,
+            _ => todo!(),
+        }
+    }
+
+    /// Transform general types like KnownClass("Num") into more useful specialized types like
+    /// KnownType(BroadType::Number)
+    fn specialize_type(&mut self, typ: Type<'text>) -> Type<'text> {
+        match typ {
+            x @ (Type::Unknown | Type::Bottom) => x,
+            Type::KnownClass(ref cls) => {
+                let index = self
+                    .classes
+                    .iter()
+                    .position(|c| Rc::ptr_eq(c, &cls))
+                    .unwrap()
+                    / 2;
+                let slot = index.try_into();
+                match slot {
+                    Ok(GlobalClassSlots::Num) => Type::KnownType(BroadType::Number),
+                    Err(_) => typ,
+                    _ => todo!(),
+                }
+            }
+            x => x,
+        }
+    }
+
     fn resolve_call_target(
         &mut self,
-        typ: Type<'text>,
+        typ: &Type<'text>,
         sig: Signature<'text>,
     ) -> CallTarget<'text> {
-        dbg!(&typ, &sig);
         match typ {
             Type::Unknown | Type::KnownType(BroadType::Object) => CallTarget::Dynamic(sig),
             Type::KnownType(BroadType::Bool) => CallTarget::Static(
-                Rc::clone(&self.classes[GlobalClassSlots::Bool as usize]),
+                // FIXME: This is jank esp. with the * 2
+                Rc::clone(&self.classes[GlobalClassSlots::Bool as usize * 2]),
                 sig,
             ),
             Type::KnownType(BroadType::Number) => CallTarget::Static(
-                Rc::clone(&self.classes[GlobalClassSlots::Num as usize]),
+                Rc::clone(&self.classes[GlobalClassSlots::Num as usize * 2]),
                 sig,
             ),
             Type::KnownType(BroadType::String) => CallTarget::Static(
@@ -1056,13 +1091,13 @@ impl<'a, 'text> Augur<'a, 'text> {
                 ),
                 _ => {
                     let broad = p.into();
-                    self.resolve_call_target(Type::KnownType(broad), sig)
+                    self.resolve_call_target(&Type::KnownType(broad), sig)
                 }
             },
             Type::KnownClassOrSubtype(class) => {
                 let latest = self
                     .method_lookups
-                    .get(&ClassMethodPair(class, sig.clone()));
+                    .get(&ClassMethodPair(Rc::clone(class), sig.clone()));
                 if let Some(latest) = latest {
                     CallTarget::Static(Rc::clone(latest), sig)
                 } else {
@@ -1080,7 +1115,7 @@ impl<'a, 'text> Augur<'a, 'text> {
                 }
             }
             Type::Bottom => {
-                dbg!("Bottom type was receiver");
+                println!("Bottom type was receiver! sig being examined: {sig:?} augur.current_method: {:?}", &self.current_method);
                 CallTarget::Dynamic(sig)
             }
         }
@@ -1094,10 +1129,13 @@ impl<'a, 'text> Augur<'a, 'text> {
         let inferred = match self.types.query_method_return_type(&class, sig.clone()) {
             Some(t) => t,
             None => {
+                println!("Type-crawling method {sig:?}");
+                /*let specialized_this =
+                    self.specialize_type(Type::KnownClassOrSubtype(Rc::clone(class)));
                 self.types.add_fact(
                     Query::MethodThis(ClassMethodPair(Rc::clone(class), sig.clone())),
-                    Type::KnownClassOrSubtype(Rc::clone(class)),
-                );
+                    specialized_this,
+                );*/
                 let old_method = self
                     .current_method
                     .replace(ClassMethodPair(Rc::clone(&class), sig.clone()));
@@ -1108,7 +1146,7 @@ impl<'a, 'text> Augur<'a, 'text> {
                         class.name, self.types
                     );
                 }
-                self.typecheck_statement(&class.find_method(&sig).expect("Couldn't").ast);
+                self.typecheck_statement(&ast.unwrap().ast);
                 self.current_method = old_method;
                 self.types.query_method_return_type(&class, sig).unwrap()
             }
@@ -1127,41 +1165,76 @@ impl<'a, 'text> Augur<'a, 'text> {
             Expression::Call(receiver, ast_sig) => {
                 let receiver: &Expression<'text> = receiver;
                 let receiver_type: Type<'text> = self.typecheck_expr(receiver);
-                dbg!(&receiver_type);
+
+                let arg_types: Vec<Type> = match ast_sig {
+                    AstSig::Getter(_) => vec![],
+                    AstSig::Setter(_, e) => vec![self.typecheck_expr(e)],
+                    AstSig::Func(_, v) => v.iter().map(|e| self.typecheck_expr(e)).collect(),
+                };
+
                 let target: CallTarget<'text> =
-                    self.resolve_call_target(receiver_type, ast_sig.into());
+                    self.resolve_call_target(&receiver_type, ast_sig.into());
                 match target {
-                    CallTarget::Dynamic(_) => Type::Unknown,
+                    CallTarget::Dynamic(_) => {
+                        //todo!("If dynamic, then ANY method with that sig could be passed these types. We need to account for this, however that will mess up the analysis for future iterations. Need some way to mark this case as 'only apply these facts after the final aug is finished'");
+                        Type::Unknown
+                    }
                     CallTarget::Static(cls, sig) => {
-                        if cls.constructors.contains(&sig) {
-                            Type::KnownClass(cls.get_constructor_type().unwrap())
-                        } else {
-                            self.typecheck_method(&cls, sig)
+                        for (i, arg) in arg_types.into_iter().enumerate() {
+                            self.types.add_fact(
+                                Query::MethodArg(ClassMethodPair(Rc::clone(&cls), sig.clone()), i),
+                                arg,
+                            );
                         }
+
+                        self.types.add_fact(
+                            Query::MethodThis(ClassMethodPair(Rc::clone(&cls), sig.clone())),
+                            receiver_type,
+                        );
+                        //if cls.constructors.contains(&sig) {
+                        //    Type::KnownClass(cls.get_constructor_type().unwrap())
+                        //} else {
+                        dbg!("Found static impl:", &cls, &sig);
+                        self.typecheck_method(&cls, sig)
+                        //}
                     }
                 }
             }
             Expression::SuperCall(ast_sig) => {
-                todo!()
-            }
-            Expression::ThisCall(ast_sig) => {
                 let receiver_type = self.types.query(Query::MethodThis(
                     self.current_method
                         .clone()
-                        .expect("Tried to typecheck ThisCall outside of a method!"),
+                        .expect("Tried to typecheck SuperCall outside of a method!"),
                 ));
-                let target = self.resolve_call_target(receiver_type, ast_sig.into());
-                match target {
-                    CallTarget::Dynamic(_) => Type::Unknown,
-                    CallTarget::Static(_cls, _sig) => {
-                        todo!("Magic to determine if this method is a constructor")
-                        // if cls.is_constructor(sig) {
-                        //      Type::KnownClass(cls)
-                        // } else {
-                        //      Type::Unknown
-                        // }
-                    }
+
+                let arg_types: Vec<Type> = match ast_sig {
+                    AstSig::Getter(_) => vec![],
+                    AstSig::Setter(_, e) => vec![self.typecheck_expr(e)],
+                    AstSig::Func(_, v) => v.iter().map(|e| self.typecheck_expr(e)).collect(),
+                };
+
+                let sig = ast_sig.into();
+                let cls = self
+                    .current_class()
+                    .find_super_class_with_method(&sig)
+                    .expect("Couldn't find super method");
+
+                for (i, arg) in arg_types.into_iter().enumerate() {
+                    self.types.add_fact(
+                        Query::MethodArg(ClassMethodPair(Rc::clone(&cls), sig.clone()), i),
+                        arg,
+                    );
                 }
+
+                self.types.add_fact(
+                    Query::MethodThis(ClassMethodPair(Rc::clone(&cls), sig.clone())),
+                    receiver_type,
+                );
+
+                self.typecheck_method(&cls, sig.clone())
+            }
+            Expression::ThisCall(ast_sig) => {
+                unimplemented!()
             }
             Expression::ArgLookup(n) => self
                 .types
@@ -1179,7 +1252,12 @@ impl<'a, 'text> Augur<'a, 'text> {
             }
             Expression::ReadField(n) => {
                 let current_class = &self.current_method.as_ref().unwrap().0;
-                self.types.query_class_field(current_class, *n)
+                let field_type = self.types.query_class_field(current_class, *n);
+                println!(
+                    "Field {n} for class {current_class:?} is of type {:?}",
+                    &field_type
+                );
+                field_type
             }
             Expression::GlobalLookup(n) => self.types.query_global(*n),
             Expression::InlineAsm(inputs, _asm) => {
@@ -1208,7 +1286,11 @@ impl<'a, 'text> Augur<'a, 'text> {
 
     fn typecheck_statement(&mut self, statement: &Statement<'text>) {
         match statement {
-            Statement::WriteField(_, _) => todo!(),
+            Statement::WriteField(n, e) => {
+                let fact = self.typecheck_expr(e);
+                self.types
+                    .add_fact(Query::ClassField(self.current_class(), *n), fact);
+            }
             Statement::WriteStaticField(_, _) => todo!(),
             Statement::AssignLocal(_, _) => todo!(),
             Statement::AssignGlobal(n, e) => {
@@ -1244,11 +1326,15 @@ impl<'a, 'text> Augur<'a, 'text> {
                 .as_ref()
                 .is_some_and(|t| t == &self.types)
             {
+                if self.types.unresolved_queries.len() > 0 {
+                    panic!("{:?}", self.types.unresolved_queries)
+                }
                 break;
             }
 
             self.previous_types = Some(self.types.clone());
 
+            // TODO: Delete all Bottom from db before re-running
             self.typecheck_statement(top_level_ast);
         }
     }
@@ -1294,7 +1380,6 @@ impl<'a, 'text> PallBearer {
         asm.with_section("_start", |asm| {
             self.lower_statement(augur, asm, &module.top_level_ast)
         });
-        dbg!(&asm);
 
         // TODO: emit a "Fault" opcode here to prevent falling off the end of the top level code
 
@@ -1336,12 +1421,18 @@ impl<'a, 'text> PallBearer {
             .current_method
             .replace(ClassMethodPair(Rc::clone(class), sig.clone()));
 
+        // TODO: If the method doesn't have an explicit return as the last statement, insert a
+        // return null
         self.intern_string(sig.to_string());
         // TODO: self.methods.insert(intern(sig), (sig.arity, asm.current_position())))
         asm.with_section(sig.to_string(), |asm| {
             // TODO: Check with augur to determine the ABI of this method
             asm.emit_op(bytecode::Op::PopThis);
             self.lower_statement(augur, asm, &ast.ast);
+            if missing_return(&ast.ast) {
+                asm.emit_op(bytecode::Op::PushPrimitive(bytecode::Primitive::Null));
+                asm.emit_op(bytecode::Op::Ret);
+            }
         });
 
         augur.current_method = old_method;
@@ -1353,22 +1444,85 @@ impl<'a, 'text> PallBearer {
         asm: &mut Assembler<'text>,
         ast: &Statement<'text>,
     ) {
+        use bytecode::Op;
         match ast {
             Statement::WriteField(n, e) => {
                 self.lower_expression(augur, asm, e);
                 asm.emit_op(bytecode::Op::WriteField(*n));
             }
             Statement::WriteStaticField(n, e) => {
-                self.lower_expression(augur, asm, e);
-                // FIXME: Generate code to get this' class object
-                asm.emit_op(bytecode::Op::WriteField(*n));
+                // Push our own object so we don't lose it
+                asm.emit_op(bytecode::Op::PushThis);
+                {
+                    self.lower_expression(augur, asm, e);
+                    self.lower_expression(
+                        augur,
+                        asm,
+                        &Expression::Call(
+                            // Can't do Expression::This or else the augur will be confused about types
+                            Box::new(Expression::InlineAsm(
+                                vec![],
+                                Assembler::from_ops(&[bytecode::Op::PushThis]).into_tree(),
+                            )),
+                            AstSig::Getter("class".into()),
+                        ),
+                    );
+                    asm.emit_op(bytecode::Op::PopThis);
+                    asm.emit_op(bytecode::Op::WriteField(*n));
+                }
+                asm.emit_op(bytecode::Op::PopThis);
             }
             Statement::AssignLocal(_, _) => todo!(),
             Statement::AssignGlobal(n, e) => {
                 self.lower_expression(augur, asm, e);
                 asm.emit_op(bytecode::Op::PopIntoGlobal(*n));
             }
-            Statement::If(_, _) => todo!(),
+            Statement::If(cond, body) => {
+                asm.with_section("if", |asm| {
+                    self.lower_expression(augur, asm, cond);
+                    asm.emit_jump_if("then0".into());
+
+                    fn lower_if_body<'a, 'text>(
+                        pall: &mut PallBearer,
+                        augur: &mut Augur<'a, 'text>,
+                        asm: &mut Assembler<'text>,
+                        body: &IfBody<'text>,
+                        n: usize,
+                    ) {
+                        match body {
+                            IfBody::Then { then } => {
+                                asm.emit_jump(Into::<Lookup>::into("end").into());
+                                asm.label(format!("then{n}").into());
+                                pall.lower_statement(augur, asm, then);
+                                asm.label("end".into());
+                            }
+                            IfBody::ThenElse { then, r#else } => {
+                                asm.emit_jump("else".into());
+                                asm.label(format!("then{n}").into());
+                                pall.lower_statement(augur, asm, then);
+                                asm.label("else".into());
+                                pall.lower_statement(augur, asm, r#else);
+                            }
+                            IfBody::ThenElseIf { then, elseif } => {
+                                asm.emit_jump(
+                                    Lookup::Relative(vec![format!("elseif{n}").into()]).into(),
+                                );
+                                asm.label(format!("then{n}").into());
+                                pall.lower_statement(augur, asm, then);
+                                asm.label(format!("elseif{n}").into());
+                                let (cond, body) = elseif;
+                                pall.lower_expression(augur, asm, cond);
+                                asm.emit_jump_if(
+                                    Lookup::Relative(vec![format!("then{}", n + 1).into()]).into(),
+                                );
+                                lower_if_body(pall, augur, asm, body, n + 1);
+                            }
+                        }
+                    }
+
+                    lower_if_body(self, augur, asm, body, 0);
+                });
+            }
             Statement::Block(v) => {
                 for statement in v {
                     self.lower_statement(augur, asm, statement);
@@ -1419,7 +1573,7 @@ impl<'a, 'text> PallBearer {
                 self.lower_expression(augur, asm, receiver);
                 let receiver_type = augur.typecheck_expr(receiver);
 
-                match augur.resolve_call_target(receiver_type, ast_sig.into()) {
+                match augur.resolve_call_target(&receiver_type, ast_sig.into()) {
                     CallTarget::Dynamic(sig) => asm.emit_op(bytecode::Op::CallNamed(
                         self.intern_string(sig.to_string()).into(),
                     )),
@@ -1434,7 +1588,36 @@ impl<'a, 'text> PallBearer {
                     ),
                 }
             }
-            Expression::SuperCall(_) => todo!(),
+            Expression::SuperCall(ast_sig) => {
+                // TODO: Figure out ABI from augur
+                match ast_sig {
+                    AstSig::Getter(_) => {}
+                    AstSig::Setter(_, e) => self.lower_expression(augur, asm, e),
+                    AstSig::Func(_, v) => {
+                        for e in v {
+                            self.lower_expression(augur, asm, e)
+                        }
+                    }
+                }
+                self.lower_expression(augur, asm, &Expression::This);
+
+                let sig = ast_sig.into();
+                let current_class = &augur.current_method.as_ref().unwrap().0;
+                dbg!(&sig, &ast_sig, &current_class);
+                let class_with_method = current_class
+                    .find_super_class_with_method(&sig)
+                    .expect("No super-impl found");
+                dbg!(&class_with_method);
+                asm.emit_call(
+                    sig.arity.arity() + 1,
+                    Lookup::Absolute(vec![
+                        "classes".into(),
+                        class_with_method.name.clone(),
+                        sig.to_string().into(),
+                    ])
+                    .into(),
+                );
+            }
             Expression::ReadField(n) => asm.emit_op(bytecode::Op::ReadField(*n)),
             Expression::ReadStatic(_) => todo!(),
             Expression::GlobalLookup(n) => asm.emit_op(bytecode::Op::PushGlobal(*n)),
@@ -1459,22 +1642,94 @@ impl<'a, 'text> PallBearer {
             }
             Expression::ClassBody(class, super_class_slot) => {
                 /*
-                   This is a tricky operation. We need to create the metaclass object, then call Class.new() on it to create the class object.
-
-                   Since calling convention puts `this` at the top of the stack, we need to push in this order
-
-                   - num_fields
-                   - superclass
-                        - static num_fields
-                        - Class (metaclass's superclass)
-                        - Class (metaclass's class)
-                        - call Class.new(_,_)
-                          |
-                     v-----
-                    - metaclass
-                    - call Class.new(_,_)
+                // TODO: Class constructor magic
+                construct new(num_fields, supertype) {
+                    /*;asm(4, this) {
+                        native NewObject
+                        pop_this
+                    }*/
+                    _numFields = num_fields
+                    _supertype = supertype
+                    _name = ""
+                    _methods = null
+                }
                 */
-                let object_fields: u32 = class.0.fields.len().try_into().unwrap();
+                // TODO: Move this into Class once asm parsing is done
+                // No-op call just to restore `this`
+                use bytecode::Op;
+                use runtime::ClassStructure;
+
+                let object_fields: i32 = class.0.num_fields().try_into().unwrap();
+                let metaclass = class.0.metaclass.as_ref().unwrap();
+                let static_fields: i32 = metaclass.fields.len().try_into().unwrap();
+                let class_name = &class.0.name;
+                let meta_name = &metaclass.name;
+
+                println!("Generating object for class {class_name}");
+                dbg!(object_fields);
+                dbg!(static_fields);
+                assert!(static_fields >= 4);
+                asm.with_section(format!("class object creation {}", class_name), |asm| {
+                    asm.emit_call(0, "body".into());
+
+                    asm.emit_jump("end".into());
+                    asm.label("body".into());
+                    // num_fields
+                    asm.emit_literal(object_fields);
+                    // superclass
+                    asm.emit_op(Op::PushGlobal(*super_class_slot));
+                    // TODO: push primitive address fixup for method dict
+                    asm.emit_op(Op::PushPrimitive(bytecode::Primitive::String(
+                        self.intern_string(class_name.clone()),
+                    )));
+                    // static num_fields
+                    asm.emit_literal(static_fields);
+                    // Class (metaclass's superclass)
+                    asm.emit_op(Op::PushGlobal(GlobalClassSlots::Class as usize));
+                    asm.emit_op(Op::PushPrimitive(bytecode::Primitive::String(
+                        self.intern_string(meta_name.clone()),
+                    )));
+                    // 4
+                    asm.emit_literal(4i32);
+                    // Class (metaclass's class)
+                    asm.emit_op(Op::PushGlobal(GlobalClassSlots::Class as usize));
+                    // native NewObject ( #fields, superclass, #static_fields, Class, 4, Class -- #fields superclass #static_fields Class NewMetaclass)
+                    asm.emit_op(Op::NativeCall(bytecode::NativeCall::NewObject));
+                    // pop into this
+                    asm.emit_op(Op::PopThis);
+                    // write_field ClassStructure::Supertype
+                    asm.emit_op(Op::WriteField(ClassStructure::Name as usize));
+                    asm.emit_op(Op::WriteField(ClassStructure::Supertype as usize));
+                    // DUP
+                    asm.emit_op(Op::Dup);
+                    // - write_field ClassStructure::num_fields
+                    asm.emit_op(Op::WriteField(ClassStructure::NumFields as usize));
+                    // - Push this
+                    asm.emit_op(Op::PushThis);
+                    // ( #fields, superclass, #static_fields, NewMetaclass )
+                    // - native NewObject
+                    asm.emit_op(Op::NativeCall(bytecode::NativeCall::NewObject));
+                    // ( #fields, superclass, NewClass )
+                    // - pop into this
+                    asm.emit_op(Op::PopThis);
+                    // - write_field ClassStructure::Supertype
+                    asm.emit_op(Op::WriteField(ClassStructure::Name as usize));
+                    asm.emit_op(Op::WriteField(ClassStructure::Supertype as usize));
+                    // - write_field ClassStructure::num_fields
+                    asm.emit_op(Op::WriteField(ClassStructure::NumFields as usize));
+                    // - push this
+                    asm.emit_op(Op::PushThis);
+                    // - ret
+                    asm.emit_op(Op::Ret);
+                    asm.label("end".into());
+                });
+                /*
+                Class.new(
+                    {num_fields},
+                    Class.new({static_num_fields}, ;asm {pushg {super_class_slot}}
+                )
+
+
                 asm.emit_op(bytecode::Op::PushPrimitive(bytecode::Primitive::Number(
                     object_fields.into(),
                 )));
@@ -1535,6 +1790,7 @@ fn main() {
         s
     };
 
+    /*
     // FIXME: This will be generated by a prelude source file with actual content at some point
     let mut prelude = vec![];
     let mut meta_classes = vec![];
@@ -1547,20 +1803,35 @@ fn main() {
         prelude.push(class);
     }
     prelude.append(&mut meta_classes);
-
-    let parsed = {
-        let mut parsed = parser::parse_file(&s);
-        prelude.append(&mut parsed.classes);
-        parsed.classes = prelude;
-        parsed
+    */
+    // TODO: include!() the prelude in the binary
+    let prelude = {
+        let mut file = File::open("prelude.wren").unwrap();
+        let mut s = String::new();
+        file.read_to_string(&mut s);
+        s
     };
 
+    let mut parser = parser::Parser::new();
+    let mut prelude_ast = parser.feed_text(&prelude);
+
+    // TODO: Perform surgery on this AST to remove the initialization code for Object and Class.
+    // These will be sitting in their slots at the start of runtime already
+    // prelude_ast.pop_from_front(2)
+    prelude_ast.remove(0);
+    prelude_ast.remove(0);
+
+    let mut main_ast = parser.feed_text(&s);
+    let mut top_level_ast = prelude_ast;
+    top_level_ast.append(&mut main_ast);
+
+    let parsed = Module::from_parser(parser, Statement::Block(top_level_ast));
     dbg!(&parsed);
     let mut augur = Augur::from_module(&parsed);
 
     augur.aug(&parsed.top_level_ast);
-    dbg!(&parsed.top_level_ast);
-    dbg!(&augur.types);
+    //dbg!(&parsed.top_level_ast);
+    //dbg!(&augur.types);
 
     let mut pall = PallBearer::new();
     let (assembled, debug) = pall.lower(&parsed, &mut augur);

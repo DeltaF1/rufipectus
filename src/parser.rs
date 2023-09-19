@@ -28,6 +28,18 @@ pub struct Module<'text> {
     pub(crate) strings: Vec<&'text str>,
 }
 
+impl<'text> Module<'text> {
+    pub fn from_parser(parser: Parser<'text>, top_level_ast: Statement<'text>) -> Self {
+        Module {
+            global_classes: parser.global_classes,
+            classes: parser.classes,
+            strings: parser.strings,
+            globals: parser.globals,
+            top_level_ast,
+        }
+    }
+}
+
 #[derive(Clone)]
 struct StringStream<'text> {
     iter: Peekable<std::iter::Enumerate<std::str::Chars<'text>>>,
@@ -92,7 +104,7 @@ impl<'text> StringStream<'text> {
 }
 
 #[derive(Debug, Default)]
-pub struct CompilerState<'text> {
+pub struct Parser<'text> {
     current_class: Option<ClassBuilder<'text>>,
     current_method: Option<MethodContext<'text>>,
     global_classes: HashMap<&'text str, Rc<ClassDef<'text>>>,
@@ -140,23 +152,10 @@ impl<'text> MethodContext<'text> {
 }
 
 pub fn parse_file<'text>(s: &'text str) -> Module<'text> {
-    let mut iter = StringStream::from_str(s);
+    let mut state = Parser::default();
+    let top_level_ast = state.feed_text(s);
 
-    let mut state = CompilerState::default();
-
-    let mut top_level_ast = vec![];
-    let mut locals = Scope::default();
-    while peek_next_token(&mut iter).is_some() {
-        top_level_ast.push(state.parse_statement(&mut iter, &mut locals));
-    }
-
-    Module {
-        global_classes: state.global_classes,
-        classes: state.classes,
-        strings: state.strings,
-        globals: state.globals,
-        top_level_ast: Statement::Block(top_level_ast),
-    }
+    Module::from_parser(state, Statement::Block(top_level_ast))
 }
 
 fn is_word(c: &char) -> bool {
@@ -286,7 +285,23 @@ fn consume_next_token_if<'text>(
     }
 }
 
-impl<'text> CompilerState<'text> {
+impl<'text> Parser<'text> {
+    pub fn new() -> Self {
+        Default::default()
+    }
+
+    pub fn feed_text(&mut self, text: &'text str) -> Vec<Statement<'text>> {
+        let mut stream = StringStream::from_str(text);
+
+        let mut v = vec![];
+        let mut locals = Scope::new();
+        while peek_next_token(&mut stream).is_some() {
+            v.push(self.parse_statement(&mut stream, &mut locals))
+        }
+
+        v
+    }
+
     fn parse_expr(&mut self, i: &mut StringStream<'text>) -> Expression<'text> {
         let tok = next_token(i).unwrap();
         // TODO: Parse floats
@@ -335,7 +350,7 @@ impl<'text> CompilerState<'text> {
                                 let byte = u8::from_str_radix(stripped, 16).unwrap();
                                 bytes.push(byte);
                             }
-                        dbg!(&bytes);
+                            dbg!(&bytes);
 
                             let mut iter = bytes.into_iter();
 
@@ -357,6 +372,30 @@ impl<'text> CompilerState<'text> {
                 "[" => todo!("List literals"),
                 "{" => todo!("Dictionary literals"),
                 "this" => Expression::This,
+                "false" => Expression::Primitive(Primitive::Bool(false)),
+                "true" => Expression::Primitive(Primitive::Bool(true)),
+                "null" => Expression::Primitive(Primitive::Null),
+                "super" => {
+                    if let Consumed::Expected = consume_next_token_if(i, ".").unwrap() {
+                        // FIXME: [] ops
+                        let name = next_token(i).unwrap();
+                        Expression::SuperCall(self.parse_func_call(i, name))
+                    } else {
+                        let mut name = self
+                            .current_method
+                            .as_ref()
+                            .unwrap()
+                            .sig
+                            .as_ref()
+                            .unwrap()
+                            .name
+                            .clone();
+                        if let MethodType::Constructor = self.current_method.as_ref().unwrap().typ {
+                            name = name + " init"
+                        }
+                        Expression::SuperCall(self.parse_func_call(i, name))
+                    }
+                }
                 _ => {
                     // TODO current_method.x()
                     if tok.starts_with('_') {
@@ -378,6 +417,7 @@ impl<'text> CompilerState<'text> {
                                 .expect(&format!("No global named {tok:?}")),
                         )
                     } else {
+                        assert_ne!(tok, "super");
                         Expression::Call(Box::new(Expression::This), self.parse_func_call(i, tok))
                     }
                 }
@@ -427,7 +467,7 @@ impl<'text> CompilerState<'text> {
     fn parse_statement(
         &mut self,
         i: &mut StringStream<'text>,
-        locals: &mut Scope<'text>,
+        _locals: &mut Scope<'text>,
     ) -> Statement<'text> {
         match next_token(i).expect("EOF when parsing statement") {
             "class" => {
@@ -446,16 +486,17 @@ impl<'text> CompilerState<'text> {
                     }
                     // FIXME: Classes can exist outside of global scope
                     let super_class = &self.global_classes[super_name];
-                    super_slot = locals
-                        .get_index(super_name)
-                        .or_else(|| self.globals.get_index(super_name))
-                        .unwrap();
+                    super_slot =
+                        None // locals
+                            //.get_index(super_name)
+                            .or_else(|| self.globals.get_index(super_name))
+                            .unwrap();
                     class_builder = ClassDef::child_of(super_class, name);
                 } else {
                     class_builder = ClassBuilder::new(name);
                 }
 
-                locals.declare(name);
+                //locals.declare(name);
                 //FIXME
                 self.globals.declare(name);
 
@@ -467,11 +508,11 @@ impl<'text> CompilerState<'text> {
                 self.classes
                     .push(def.metaclass.as_ref().map(Rc::clone).unwrap());
                 Statement::AssignGlobal(
-                    locals.get_index(name).unwrap(),
+                    self.globals.get_index(name).unwrap(),
                     Box::new(Expression::ClassBody(ClassRef(def), super_slot)),
                 )
             }
-            "if" => todo!(), //parse_if(i, ctx),
+            "if" => self.parse_if(i, _locals), //parse_if(i, ctx),
             "return" => {
                 if i.newline_before_next_token() {
                     Statement::Return(Expression::Primitive(Primitive::Null))
@@ -479,7 +520,6 @@ impl<'text> CompilerState<'text> {
                     Statement::Return(self.parse_expr(i))
                 }
             }
-            "{" => self.parse_block(i, locals),
             "yield" => {
                 if i.newline_before_next_token() {
                     Statement::Yield(Expression::Primitive(Primitive::Null))
@@ -487,6 +527,7 @@ impl<'text> CompilerState<'text> {
                     Statement::Yield(self.parse_expr(i))
                 }
             }
+            "{" => self.parse_block(i, _locals),
             "var" => {
                 let name = peek_next_token(i).unwrap();
                 self.globals.declare(name);
@@ -496,7 +537,7 @@ impl<'text> CompilerState<'text> {
                     // Drop the name
                     next_token(i);
                 }
-                self.parse_statement(i, locals)
+                self.parse_statement(i, _locals)
             }
             x => {
                 let assignment = next_token_is(i, "=").unwrap();
@@ -521,7 +562,7 @@ impl<'text> CompilerState<'text> {
                     Some(NameType::Local) => {
                         if assignment {
                             Statement::AssignLocal(
-                                locals.get_index(x).unwrap(),
+                                _locals.get_index(x).unwrap(),
                                 Box::new(self.parse_expr(i)),
                             )
                         } else {
@@ -539,8 +580,8 @@ impl<'text> CompilerState<'text> {
                         }
                     }
                     Some(NameType::ThisCall) => {
-                        let sig: AstSig = self.parse_func_call(i, x);
-                        Statement::ExprStatement(Expression::Call(Box::new(Expression::This), sig))
+                        i.rollback(x.len());
+                        Statement::ExprStatement(self.parse_expr(i))
                     }
                     Some(NameType::Arg) => unimplemented!("Using arg in statement mode"),
                     None => {
@@ -559,6 +600,34 @@ impl<'text> CompilerState<'text> {
                 }
             }
         }
+    }
+
+    fn parse_if(
+        &mut self,
+        i: &mut StringStream<'text>,
+        _locals: &mut Scope<'text>,
+    ) -> Statement<'text> {
+        use crate::ast::IfBody;
+        let cond = self.parse_expr(i);
+        assert_eq!(next_token(i), Some("{"));
+        let body = self.parse_block(i, _locals);
+        let if_body = if let Some(Consumed::Expected) = consume_next_token_if(i, "else") {
+            if let Consumed::Expected = consume_next_token_if(i, "if").unwrap() {
+                todo!("elseif chain")
+            } else {
+                assert_eq!(next_token(i), Some("{"));
+                let r#else = self.parse_block(i, _locals);
+                IfBody::ThenElse {
+                    then: Box::new(body),
+                    r#else: Box::new(r#else),
+                }
+            }
+        } else {
+            IfBody::Then {
+                then: Box::new(body),
+            }
+        };
+        Statement::If(Box::new(cond), if_body)
     }
 
     fn parse_block(
@@ -581,10 +650,15 @@ impl<'text> CompilerState<'text> {
         }
     }
 
-    fn parse_func_call(&mut self, i: &mut StringStream<'text>, name: &'text str) -> AstSig<'text> {
+    fn parse_func_call<S: Into<std::borrow::Cow<'text, str>>>(
+        &mut self,
+        i: &mut StringStream<'text>,
+        name: S,
+    ) -> AstSig<'text> {
         let intermediate;
-        if is_binary_op(name) {
-            return AstSig::Func(name.into(), vec![self.parse_expr(i)]);
+        let name = name.into();
+        if is_binary_op(&name) {
+            return AstSig::Func(name, vec![self.parse_expr(i)]);
         } else {
             if let Some(Consumed::Expected) = consume_next_token_if(i, "(") {
                 let mut args = vec![];
@@ -606,7 +680,7 @@ impl<'text> CompilerState<'text> {
                     }
                 }
                 assert_eq!(next_token(i), Some(")"));
-                return AstSig::Func(name.into(), args);
+                return AstSig::Func(name, args);
             } else if let Some(Consumed::Expected) = consume_next_token_if(i, "{") {
                 todo!("Function body arguments")
             } else {
