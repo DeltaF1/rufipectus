@@ -1623,28 +1623,8 @@ fn main() {
             bytecode.finish_function();
         */
     });
-    Square.add_method_with(Signature::getter("foo"), |class| {
-        MethodAst {
-            ast: Statement::Return(Expression::ThisCall(AstSig::Getter("height".into()))),
-        }
-        /*
-            let word = "height";
-            if let Some(index) = bytecode.function.get_local(word) {
-                bytecode.emit(ByteCode::PushLocal(index));
-            } else if word[0].is_lowercase() {
-                // Can't CallAddress here because the method might be re-defined by a subclass
-                // We can actually determine that statically but it requires a second-pass or some really
-                // messy fixups
-                // TODO: Keep track of whether a super-classes method was redefined by some further
-                // subclass. If a method M for class A is the last version of M (i.e. there are no
-                // subclasses of A that define M) then any call to M for an object that is known
-                // at compile-time to be of type A can have the method's location compiled in.
-                bytecode.emit(ByteCode::CallDynamic(word));
-            } else {
-                todo!("Recurse the lexical stack looking for locals")
-            }
-            bytecode.finish_function();
-        */
+    Square.add_method_with(Signature::getter("foo"), |class| MethodAst {
+        ast: Statement::Return(Expression::ThisCall(AstSig::Getter("height".into()))),
     });
     /*
     bytecode.add_local("s");
@@ -1860,7 +1840,7 @@ mod method_lookup_tests {
     macro_rules! expect_call_target {
         ($aug:ident , $class:ident [ $sig:ident ] , $expected:expr ) => {
             assert_eq!(
-                $aug.resolve_call_target(Type::KnownClass(Rc::clone(&$class)), $sig.clone()),
+                $aug.resolve_call_target(&Type::KnownClass(Rc::clone(&$class)), $sig.clone()),
                 $expected
             )
         };
@@ -1868,7 +1848,7 @@ mod method_lookup_tests {
         ($aug:ident , ? $class:ident [ $sig:ident ] , $expected:expr ) => {
             assert_eq!(
                 $aug.resolve_call_target(
-                    Type::KnownClassOrSubtype(Rc::clone(&$class)),
+                    &Type::KnownClassOrSubtype(Rc::clone(&$class)),
                     $sig.clone()
                 ),
                 $expected
@@ -1930,7 +1910,7 @@ mod method_lookup_tests {
     fn unreachable_method() {
         let (a, b, c, foo, foo2, baz) = class_hierarchy();
         let mut aug = Augur::new(vec![&a, &b, &c]);
-        aug.resolve_call_target(Type::KnownClass(Rc::clone(&b)), baz.clone());
+        aug.resolve_call_target(&Type::KnownClass(Rc::clone(&b)), baz.clone());
     }
 }
 
