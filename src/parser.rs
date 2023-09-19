@@ -1,6 +1,6 @@
 use std::cell::RefCell;
 use std::collections::HashMap;
-use std::fs::File;
+
 use std::io::Read;
 use std::iter::Peekable;
 use std::rc::Rc;
@@ -192,7 +192,7 @@ fn next_token<'a>(i: &mut StringStream<'a>) -> Option<&'a str> {
         return if next_char == &'/' {
             println!("Skipping line comment");
             // Line comment
-            while i.iter.next().map(|(i, c)| c)? != '\n' {}
+            while i.iter.next().map(|(_i, c)| c)? != '\n' {}
             next_token(i)
         } else if next_char == &'*' {
             println!("Skipping multi-line comment");
@@ -472,7 +472,7 @@ impl<'text> Parser<'text> {
         match next_token(i).expect("EOF when parsing statement") {
             "class" => {
                 let name = next_token(i).expect("EOF when parsing class name");
-                let mut class_builder;
+                let class_builder;
                 let mut super_slot = crate::common::GlobalClassSlots::Object as usize;
                 if next_token_is(i, "is").expect("EOF when parsing class declaration") {
                     let super_name = next_token(i).expect("EOF parsing superclass name");
@@ -716,12 +716,12 @@ impl<'text> Parser<'text> {
 
         if next_token_is(i, "=").unwrap() {
             next_token(i);
-            let setter_arg = next_token(i).unwrap();
+            let _setter_arg = next_token(i).unwrap();
             //self.current_method.args.declare(setter_arg)
             arity = match arity {
                 Arity::Getter => Arity::Setter,
                 Arity::SubscriptGetter(n) => Arity::SubscriptSetter(n),
-                x => panic!(),
+                _x => panic!(),
             }
         }
 
@@ -736,7 +736,7 @@ impl<'text> Parser<'text> {
                 "," => panic!("Too many commas"),
                 "]" => break,
                 ")" => break,
-                x => {}
+                _ => {}
             }
             let name = next_token(i).expect("EOF when parsing parameter list");
             args.declare(name);
@@ -747,7 +747,7 @@ impl<'text> Parser<'text> {
                 }
                 "]" => break,
                 ")" => break,
-                x => panic!("Malformed list"),
+                _x => panic!("Malformed list"),
             }
         }
 
@@ -817,7 +817,7 @@ impl<'text> Parser<'text> {
             if c == '"' {
                 break;
             } else if c == '\\' {
-                let escaped = i.next();
+                let _escaped = i.next();
                 // TODO: Process escapes like \n etc.
             }
         }

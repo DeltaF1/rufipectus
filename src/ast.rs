@@ -1,4 +1,4 @@
-use std::{borrow::Cow, rc::Rc};
+use std::borrow::Cow;
 
 use crate::{common::StringAddress, Arity, ClassRef};
 
@@ -61,13 +61,6 @@ impl<'text> Signature<'text> {
     }
 }
 
-#[deprecated]
-#[derive(Debug)]
-enum Ast<'a> {
-    Statement(Statement<'a>),
-    Expression(Expression<'a>),
-}
-
 // TODO: Expression statement
 #[derive(Debug, PartialEq)]
 pub enum Statement<'a> {
@@ -86,8 +79,6 @@ pub enum Statement<'a> {
 pub enum Expression<'a> {
     This,
     Call(Box<Expression<'a>>, AstSig<'a>),
-    #[deprecated]
-    ThisCall(AstSig<'a>),
     SuperCall(AstSig<'a>),
     ReadField(usize),
     ReadStatic(usize),

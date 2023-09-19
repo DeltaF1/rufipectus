@@ -1,5 +1,4 @@
 use crate::common::{CodeAddress, StringAddress};
-use crate::Arity;
 use std::borrow::Cow;
 use std::collections::HashMap;
 use std::mem::MaybeUninit;
@@ -453,7 +452,7 @@ pub struct MissingLabels {
 }
 
 impl std::fmt::Display for MissingLabels {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> Result<(), std::fmt::Error> {
+    fn fmt(&self, _f: &mut std::fmt::Formatter<'_>) -> Result<(), std::fmt::Error> {
         todo!()
     }
 }
@@ -709,7 +708,7 @@ impl<'text> Assembler<'text> {
                     }
                     FixupType::CodeOffset => {
                         // Add 4 since ip will have moved forward to account for the length of the instruction
-                        let location: i32 = ((fixup.location + 4).try_into().unwrap());
+                        let location: i32 = (fixup.location + 4).try_into().unwrap();
                         let target: i32 = (*target).try_into().unwrap();
                         let diff = target - location;
                         (&mut output[fixup.location..fixup.location + 4])
@@ -739,7 +738,7 @@ impl<'text> Assembler<'text> {
 
     // TODO: Create a DebugSymbols struct that lets you look up the closest label for a given ip
     pub fn assemble(&mut self) -> Result<(Binary, DebugSymbols<'text>), MissingLabels> {
-        self.get_or_generate();
+        self.get_or_generate().unwrap();
         match &self.state {
             IntermediateState::Sized(assembly) => Err(MissingLabels {
                 labels: assembly.fixups.iter().map(|f| f.key.join("/")).collect(),
@@ -789,7 +788,7 @@ impl<'text> Assembler<'text> {
                 }
             }) {
                 Some(node) => current = node,
-                none => panic!("Can't find the current section"),
+                _none => panic!("Can't find the current section"),
             }
         }
 
@@ -810,7 +809,7 @@ impl<'text> Assembler<'text> {
                 }
             }) {
                 Some(node) => current = node,
-                none => panic!("Can't find the current section"),
+                _none => panic!("Can't find the current section"),
             }
         }
 

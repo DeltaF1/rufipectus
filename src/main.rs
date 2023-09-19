@@ -23,12 +23,6 @@ struct InitializedOrderedSet<T> {
     written_items: HashSet<T>,
 }
 
-impl<T: Default> InitializedOrderedSet<T> {
-    fn new() -> Self {
-        Default::default()
-    }
-}
-
 impl<T> InitializedOrderedSet<T>
 where
     T: std::cmp::Eq + std::hash::Hash,
@@ -970,14 +964,6 @@ impl<'text> TypeDatabase<'text> {
             }
         }
     }
-
-    fn type_check_method(world: &mut TypeDatabase, class: &Rc<ClassDef>, method_ast: MethodAst) {}
-}
-
-struct MethodTypes<'text> {
-    args: Vec<Type<'text>>,
-    this: Type<'text>,
-    ret: Type<'text>,
 }
 
 #[derive(Debug)]
@@ -1233,9 +1219,6 @@ impl<'a, 'text> Augur<'a, 'text> {
 
                 self.typecheck_method(&cls, sig.clone())
             }
-            Expression::ThisCall(ast_sig) => {
-                unimplemented!()
-            }
             Expression::ArgLookup(n) => self
                 .types
                 .query(Query::MethodArg(self.current_method.clone().unwrap(), *n)),
@@ -1444,7 +1427,6 @@ impl<'a, 'text> PallBearer {
         asm: &mut Assembler<'text>,
         ast: &Statement<'text>,
     ) {
-        use bytecode::Op;
         match ast {
             Statement::WriteField(n, e) => {
                 self.lower_expression(augur, asm, e);
@@ -1549,9 +1531,9 @@ impl<'a, 'text> PallBearer {
         &mut self,
         augur: &mut Augur<'a, 'text>,
         asm: &mut Assembler<'text>,
-        mut ast: &Expression<'text>,
+        ast: &Expression<'text>,
     ) {
-        let typ = augur.typecheck_expr(ast);
+        let _typ = augur.typecheck_expr(ast);
         /*
         if let Type::KnownPrimitive(prim) = typ {
             ast = &Expression::Primitive(prim);
@@ -1769,7 +1751,6 @@ impl<'a, 'text> PallBearer {
                 // metaclass.new(class.num_fields, superclass)
                 // TODO: Pointer to method lookup
             }
-            Expression::ThisCall(_) => todo!(),
             Expression::Construct => {
                 asm.emit_op(bytecode::Op::ReadField(
                     runtime::ClassStructure::NumFields as usize,
@@ -1786,7 +1767,7 @@ fn main() {
     let s = {
         let mut f = File::open("test.wren").unwrap();
         let mut s = String::new();
-        f.read_to_string(&mut s);
+        f.read_to_string(&mut s).unwrap();
         s
     };
 
@@ -1808,7 +1789,7 @@ fn main() {
     let prelude = {
         let mut file = File::open("prelude.wren").unwrap();
         let mut s = String::new();
-        file.read_to_string(&mut s);
+        file.read_to_string(&mut s).unwrap();
         s
     };
 
@@ -1838,7 +1819,8 @@ fn main() {
     //dbg!(&assembled);
 
     runtime::warmup();
-    dbg!(runtime::run(&assembled, &debug, assembled.start));
+    let ret = runtime::run(&assembled, &debug, assembled.start).unwrap();
+    println!("{:?}", ret);
 }
 
 // TODO:
@@ -1899,8 +1881,8 @@ mod type_tests {
     use super::*;
 
     fn test_type_commutative<'a>(a: Type<'a>, b: Type<'a>, expected: Type<'a>) {
-        let first = (a.clone() | b.clone());
-        let second = (b | a);
+        let first = a.clone() | b.clone();
+        let second = b | a;
         assert_eq!(first, second, "Type was not commutatively or'd");
         assert_eq!(first, expected);
     }

@@ -38,7 +38,7 @@ impl TryFrom<usize> for GlobalClassSlots {
     }
 }
 
-pub static GlobalClassNames: [&'static str; GlobalClassSlots::End as usize] = [
+pub static GLOBAL_CLASS_NAMES: [&'static str; GlobalClassSlots::End as usize] = [
     /* The cyclical powerhouse */
     "Object", "Class", /* Primitive classes */
     "Bool", "Num", "String", "Null", /* Built-in classes */
