@@ -415,7 +415,7 @@ impl<'a> ClassDef<'a> {
     }
 
     pub fn child_of(parent: &Rc<ClassDef<'a>>, name: &'a str) -> ClassBuilder<'a> {
-        ClassBuilder {
+        let mut builder = ClassBuilder {
             class: ClassDef {
                 name: name.into(),
                 parent: Some(parent.clone()),
@@ -423,7 +423,13 @@ impl<'a> ClassDef<'a> {
             },
             meta_class: ClassDef::new((name.to_owned() + " metaclass").into()),
             ..Default::default()
-        }
+        };
+
+        builder.write_static_field(";numFields");
+        builder.write_static_field(";supertype");
+        builder.write_static_field(";name");
+        builder.write_static_field(";methods");
+        builder
     }
 
     fn num_parent_fields(&self) -> usize {
@@ -487,11 +493,18 @@ impl<'a> ClassDef<'a> {
 
 impl<'a> ClassBuilder<'a> {
     pub fn new(name: &'a str) -> Self {
-        ClassBuilder {
+        let mut builder = ClassBuilder {
             class: ClassDef::new(name.into()),
             meta_class: ClassDef::new((name.to_owned() + " metaclass").into()),
             ..Default::default()
-        }
+        };
+
+        // Every class has these 4 unaccessable fields. The ; ensures they won't be looked up by the parser
+        builder.write_static_field(";numFields");
+        builder.write_static_field(";supertype");
+        builder.write_static_field(";name");
+        builder.write_static_field(";methods");
+        builder
     }
 
     pub fn write_field(&mut self, name: &'a str) -> usize {
