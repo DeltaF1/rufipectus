@@ -224,7 +224,7 @@ impl<'text> BitOr<Type<'text>> for Type<'text> {
                 }
             }
             (Type::KnownType(_), _) => Type::Unknown,
-            (Type::Bottom, x) => x,
+            (x, Type::Bottom) => x,
             (x, y) => panic!("Unforseen type combination ({x:?}, {y:?})"),
         }
     }
