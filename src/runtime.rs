@@ -2,7 +2,7 @@ use std::cell::Ref;
 use std::cell::RefCell;
 use std::cell::RefMut;
 use std::cell::UnsafeCell;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fmt::{Display, Formatter};
 use std::mem::MaybeUninit;
 use std::rc::Rc;
@@ -99,13 +99,41 @@ fn bootstrap_class() -> (ObjectRef, ObjectRef, ObjectRef) {
 
 static mut GLOBAL_STATE: Vec<Value> = vec![];
 
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Clone, Copy, PartialEq)]
 pub enum PrimitiveValue {
     Boolean(bool),
     Number(f64),
     String(*const [u8]),
     Range(f64, f64, bool),
     Null,
+}
+
+impl std::fmt::Debug for PrimitiveValue {
+    fn fmt(&self, f: &mut Formatter<'_>) -> Result<(), std::fmt::Error> {
+        write!(f, "{}", self)
+    }
+}
+impl std::fmt::Display for PrimitiveValue {
+    fn fmt(&self, f: &mut Formatter<'_>) -> Result<(), std::fmt::Error> {
+        match self {
+            PrimitiveValue::Boolean(b) => {
+                write!(f, "{}", *b)
+            }
+            PrimitiveValue::Number(num) => {
+                write!(f, "{}", *num)
+            }
+            PrimitiveValue::String(ptr) => {
+                let bytes: &[u8] = unsafe { &**ptr };
+                if let Ok(s) = std::str::from_utf8(bytes) {
+                    write!(f, "{:?}", s)
+                } else {
+                    write!(f, "{:?}", bytes)
+                }
+            }
+            PrimitiveValue::Range(..) => todo!(),
+            PrimitiveValue::Null => write!(f, "null"),
+        }
+    }
 }
 
 impl PrimitiveValue {
@@ -229,9 +257,46 @@ impl Value {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 #[repr(transparent)]
 pub struct ObjectRef(Rc<DSTRefCellInner<ObjectRef, Value>>);
+
+impl std::fmt::Debug for ObjectRef {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        thread_local! {
+            static RECURSION_GUARD: RefCell<HashSet<*const DSTRefCellInner<ObjectRef, Value>>> = RefCell::new(HashSet::new());
+        }
+        let ptr = Rc::as_ptr(&self.0);
+        fn borrow_class_name<'a>(class: &'a ObjectRef) -> std::borrow::Cow<'a, str> {
+            let class_name = &class.borrow_fields()[ClassStructure::Name as usize];
+            match class_name {
+                Value::Primitive(PrimitiveValue::String(ptr)) => {
+                    // SAFETY: I think that 'a keeps the Ref to class immutably borrowed
+                    let reference: &'a [u8] = unsafe { &**ptr };
+                    std::str::from_utf8(reference).unwrap().into()
+                }
+                _ => format!("{:p}", Rc::as_ptr(&class.0)).into(),
+            }
+        }
+        let class = &self.borrow_class();
+        let cow = borrow_class_name(class);
+
+        if RECURSION_GUARD.with(|refcell| refcell.borrow_mut().contains(&ptr)) {
+            f.debug_tuple("<skipped recursive Object>")
+                .field(&cow)
+                .finish()
+        } else {
+            RECURSION_GUARD.with(|refcell| refcell.borrow_mut().insert(ptr));
+            let ret = f
+                .debug_struct("ObjectRef")
+                .field("class", &cow)
+                .field("fields", &self.borrow_fields())
+                .finish();
+            RECURSION_GUARD.with(|refcell| refcell.borrow_mut().remove(&ptr));
+            ret
+        }
+    }
+}
 
 #[derive(Debug)]
 pub enum ConversionError {
