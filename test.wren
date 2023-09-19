@@ -19,4 +19,4 @@ class Square is Rectangle {
 }
 
 var s = Square.new(10)
-s.area()
+yield s.area()

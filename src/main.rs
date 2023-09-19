@@ -1131,6 +1131,9 @@ impl<'a, 'text> Augur<'a, 'text> {
                     fact,
                 )
             }
+            Statement::Yield(e) => {
+                self.typecheck_expr(e);
+            }
             Statement::ExprStatement(e) => {
                 self.typecheck_expr(e);
             }
@@ -1277,6 +1280,10 @@ impl<'a, 'text> PallBearer {
             Statement::Return(e) => {
                 self.lower_expression(augur, asm, e);
                 asm.emit_op(bytecode::Op::Ret);
+            }
+            Statement::Yield(e) => {
+                self.lower_expression(augur, asm, e);
+                asm.emit_op(bytecode::Op::Yield);
             }
             Statement::ExprStatement(e) => {
                 // TODO: Certain expression types are no-ops in ExprStatement

@@ -469,6 +469,13 @@ impl<'text> CompilerState<'text> {
                 }
             }
             "{" => self.parse_block(i, locals),
+            "yield" => {
+                if i.newline_before_next_token() {
+                    Statement::Yield(Expression::Primitive(Primitive::Null))
+                } else {
+                    Statement::Yield(self.parse_expr(i))
+                }
+            }
             "var" => {
                 let name = peek_next_token(i).unwrap();
                 self.globals.declare(name);

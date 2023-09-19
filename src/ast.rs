@@ -78,6 +78,7 @@ pub enum Statement<'a> {
     If(Box<Expression<'a>>, IfBody<'a>),
     Block(Vec<Statement<'a>>),
     Return(Expression<'a>),
+    Yield(Expression<'a>),
     ExprStatement(Expression<'a>),
 }
 
