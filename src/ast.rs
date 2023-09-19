@@ -133,3 +133,15 @@ impl<'a> From<&AstSig<'a>> for Signature<'a> {
         }
     }
 }
+
+impl<'a> AstSig<'a> {
+    pub fn from_sig(sig: Signature<'a>, mut args: Vec<Expression<'a>>) -> Self {
+        assert_eq!(sig.arity.arity(), args.len());
+        match sig.arity {
+            Arity::Getter => AstSig::Getter(sig.name),
+            Arity::Setter => AstSig::Setter(sig.name, Box::new(args.pop().unwrap())),
+            Arity::Func(_) => AstSig::Func(sig.name, args),
+            _ => todo!("subscripts"),
+        }
+    }
+}
