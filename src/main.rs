@@ -458,6 +458,10 @@ impl<'a> ClassDef<'a> {
         None
     }
 
+    pub fn find_super_method(&self, sig: &Signature<'a>) -> Option<&MethodAst<'a>> {
+        self.parent.as_ref()?.find_method(sig)
+    }
+
     fn find_class_with_method(self: &Rc<Self>, sig: &Signature<'a>) -> Option<Rc<ClassDef<'a>>> {
         if self.methods.contains_key(sig) {
             Some(self.clone())
@@ -466,6 +470,13 @@ impl<'a> ClassDef<'a> {
                 .as_ref()
                 .and_then(|parent| ClassDef::find_class_with_method(parent, sig))
         }
+    }
+
+    fn find_super_class_with_method(
+        self: &Rc<Self>,
+        sig: &Signature<'a>,
+    ) -> Option<Rc<ClassDef<'a>>> {
+        self.parent.as_ref()?.find_class_with_method(sig)
     }
 
     /// Only used for debugging
