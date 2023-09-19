@@ -86,6 +86,7 @@ pub enum Statement<'a> {
 pub enum Expression<'a> {
     This,
     Call(Box<Expression<'a>>, AstSig<'a>),
+    #[deprecated]
     ThisCall(AstSig<'a>),
     SuperCall(AstSig<'a>),
     ReadField(usize),
@@ -101,6 +102,7 @@ pub enum Expression<'a> {
     Primitive(Primitive),
     InlineAsm(Vec<Expression<'a>>, crate::bytecode::Section<'a>),
     ClassBody(ClassRef<'a>, usize),
+    Construct,
 }
 
 #[derive(Debug, PartialEq)]

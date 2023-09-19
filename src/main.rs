@@ -334,6 +334,21 @@ struct MethodAst<'a> {
     ast: Statement<'a>,
 }
 
+// TODO: move to ast
+fn missing_return(s: &Statement) -> bool {
+    match s {
+        Statement::Return(_) => false,
+        Statement::Block(v) => {
+            if v.len() == 0 {
+                true
+            } else {
+                missing_return(&v[v.len() - 1])
+            }
+        }
+        _ => true,
+    }
+}
+
 #[derive(Default)]
 struct ClassDef<'text> {
     name: Cow<'text, str>,
@@ -507,7 +522,23 @@ impl<'a> ClassBuilder<'a> {
         self.static_fields.read_use(name)
     }
 
-    pub fn add_constructor(&mut self, sig: Signature<'a>, body: MethodAst<'a>) -> &MethodAst<'a> {
+    pub fn add_constructor(
+        &mut self,
+        sig: Signature<'a>,
+        mut body: MethodAst<'a>,
+    ) -> &MethodAst<'a> {
+        let init_sig = Signature {
+            name: sig.name.to_owned() + " init",
+            arity: sig.arity,
+        };
+
+        assert!(sig.arity.arity() <= 2);
+        let mut args = vec![];
+        for n in 0..sig.arity.arity() {
+            args.push(Expression::ArgLookup(n));
+        }
+
+        /*
         let asm = {
             let mut assembler = Assembler::new();
             assembler.emit_op(bytecode::Op::ReadField(
@@ -515,23 +546,53 @@ impl<'a> ClassBuilder<'a> {
             ));
             assembler.emit_op(bytecode::Op::PushThis);
             assembler.emit_op(bytecode::Op::NativeCall(bytecode::NativeCall::NewObject));
+
+            // Store the object to return later
+            assembler.emit_op(bytecode::Op::Dup);
+            assembler.emit_op(bytecode::Op::PopThis);
+
+            // FIXME: Typechecking can't see this call so the initializer doesn't get typechecked!
+            // Now our stack is arg0 arg1 ... argn new_object
+            assembler.emit_call(
+                init_sig.arity.arity() + 1,
+                Lookup::Absolute(vec![
+                    "classes".into(),
+                    self.class.name.clone(),
+                    init_sig.to_string().into(),
+                ])
+                .into(),
+            );
+            // TODO: Guarantee that all initializers return this so we can tail-call here instead
+            assembler.emit_op(bytecode::Op::PushThis);
             assembler.into_tree()
         };
-
+        let asm = Expression::InlineAsm(args, asm);
+        */
         self.meta_class.methods.insert(
             sig.clone(),
             MethodAst {
-                ast: Statement::Return(Expression::InlineAsm(vec![], asm)),
+                ast: Statement::Return(Expression::Call(
+                    Box::new(Expression::Construct),
+                    AstSig::from_sig(init_sig.clone(), args),
+                )),
             }
             .into(),
         );
 
-        let init_sig = Signature {
-            name: sig.name.to_owned() + " init",
-            arity: sig.arity,
-        };
-
         self.meta_class.constructors.insert(sig);
+
+        if missing_return(&body.ast) {
+            println!("ast before adding a return: {:?}", &body.ast);
+            match &mut body.ast {
+                Statement::Block(v) => v.push(Statement::Return(Expression::This)),
+                _ => {
+                    body.ast = Statement::Block(vec![body.ast, Statement::Return(Expression::This)])
+                }
+            }
+            println!("ast after adding a return: {:?}", &body.ast);
+        }
+
+        // TODO: Error if any returns inside body return anything other than `this`
 
         self.add_method(init_sig, body)
     }
@@ -1106,7 +1167,14 @@ impl<'a, 'text> Augur<'a, 'text> {
             Expression::ClassBody(class, _) => {
                 Type::KnownClass(Rc::clone(class.0.metaclass.as_ref().unwrap()))
             }
+            Expression::Construct => {
+                Type::KnownClass(self.current_class().get_constructor_type().unwrap())
+            }
         }
+    }
+
+    fn current_class(&self) -> Rc<ClassDef<'text>> {
+        Rc::clone(&self.current_method.as_ref().unwrap().0)
     }
 
     fn typecheck_statement(&mut self, statement: &Statement<'text>) {
@@ -1413,11 +1481,18 @@ impl<'a, 'text> PallBearer {
                     ])
                     .into(),
                 );
-
+                */
                 // metaclass.new(class.num_fields, superclass)
                 // TODO: Pointer to method lookup
             }
             Expression::ThisCall(_) => todo!(),
+            Expression::Construct => {
+                asm.emit_op(bytecode::Op::ReadField(
+                    runtime::ClassStructure::NumFields as usize,
+                ));
+                asm.emit_op(bytecode::Op::PushThis);
+                asm.emit_op(bytecode::Op::NativeCall(bytecode::NativeCall::NewObject));
+            }
         }
     }
 }

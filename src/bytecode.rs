@@ -124,6 +124,8 @@ pub enum Op {
     #[deprecated]
     YieldNull,
     NativeCall(NativeCall),
+    // TODO: new opcode for calling user-defined code
+    // Foreign(u32)
 }
 
 const fn opcode(op: &Op) -> u8 {
