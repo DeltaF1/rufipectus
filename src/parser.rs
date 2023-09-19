@@ -190,12 +190,12 @@ fn next_token<'a>(i: &mut StringStream<'a>) -> Option<&'a str> {
     if s == "/" {
         let (_, next_char) = i.iter.peek()?;
         return if next_char == &'/' {
-            println!("Skipping line comment");
+            //println!("Skipping line comment");
             // Line comment
             while i.iter.next().map(|(_i, c)| c)? != '\n' {}
             next_token(i)
         } else if next_char == &'*' {
-            println!("Skipping multi-line comment");
+            //println!("Skipping multi-line comment");
             // We're parsing a multi-line comment
             // Drop the "*"
             next_token(i);
@@ -211,7 +211,7 @@ fn next_token<'a>(i: &mut StringStream<'a>) -> Option<&'a str> {
         };
     }
 
-    println!("next_token = {s:?}");
+    //println!("next_token = {s:?}");
     Some(s)
 }
 
@@ -346,11 +346,9 @@ impl<'text> Parser<'text> {
                                 }
 
                                 let stripped = byte.strip_prefix("0x").unwrap_or(byte);
-                                dbg!(stripped);
                                 let byte = u8::from_str_radix(stripped, 16).unwrap();
                                 bytes.push(byte);
                             }
-                            dbg!(&bytes);
 
                             let mut iter = bytes.into_iter();
 
@@ -824,7 +822,7 @@ impl<'text> Parser<'text> {
         let end = i.index() - 1;
 
         let str = &i.source[start..end];
-        println!("Parsed string: {str:?}");
+        //println!("Parsed string: {str:?}");
         if let Some(index) = self.strings.iter().position(|s| s == &str) {
             index
         } else {

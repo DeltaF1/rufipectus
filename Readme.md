@@ -9,3 +9,7 @@ Stupid pun:
 - Learn about optimizing compilers
 - Do as much compile-time type analysis as possible to reduce the amount of method lookups
 - Add some more warnings and safeguards especially around null values
+
+## Usage
+
+`cargo run test.wren`

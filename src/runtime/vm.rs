@@ -15,12 +15,12 @@ pub fn run(
     loop {
         let mut iter = (binary.bytes[(ctx.ip as usize)..]).iter().copied();
 
-        dbg!(&ctx);
+        //dbg!(&ctx);
         let op = Op::deserialize(&mut iter).unwrap();
-        println!(
+        /*println!(
             "({})[{}] {:?}",
             symbols.map(|s| -> &str {&s.labels[ctx.ip as usize]}).unwrap_or("???"), ctx.ip, &op
-        );
+        );*/
         ctx.ip += TryInto::<CodeAddress>::try_into(op.len()).unwrap();
         match op {
             Op::Dup => {
