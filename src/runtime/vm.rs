@@ -153,20 +153,20 @@ mod test {
     use crate::{bytecode::Assembler, runtime::GlobalClassSlots};
     #[test]
     fn stack_ops() {
-        let code = vec![
-            Op::PushPrimitive(bytecode::Primitive::Number(69.0)),
-            Op::PushPrimitive(bytecode::Primitive::Number(420.0)),
-            Op::CallDirect(2, 4),
-            Op::Yield,
+        let binary = {
+            let mut asm = Assembler::new();
+            asm.emit_literal(69);
+            asm.emit_literal(420);
+            asm.emit_call(2, "first".into());
+            asm.emit_op(Op::Yield);
+            asm.with_section("first", |asm| {
             // fn first(a, b) {
             //      return a
             //  }
-            Op::Pop,
-            Op::Ret,
-        ];
-        let binary = {
-            let mut asm = Assembler::new();
-            asm.add_ops(&code);
+                asm.emit_op(Op::Pop);
+                asm.emit_op(Op::Yield);
+            });
+
             asm.assemble().unwrap()
         };
 
@@ -206,6 +206,7 @@ mod test {
          s.area
 
         */
+        todo!("None of the addresses or offsets in this are still valid since they're offsets in the op list, not the bytecode");
         let code: Vec<bytecode::Op> = vec![
             /* Class */
             // TODO: Some of these methods should be un-reachable by user code. Putting a space in

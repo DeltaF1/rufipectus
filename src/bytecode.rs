@@ -880,7 +880,7 @@ impl<'text> Assembly<'text> {
         }
 
         DebugSymbols {
-            labels: label_table.into_iter().map(|o| o.unwrap()).collect(),
+            labels: label_table.into_iter().map(|o| o.unwrap_or("???".into())).collect(),
         }
     }
 }
