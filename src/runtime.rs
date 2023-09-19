@@ -155,6 +155,18 @@ impl From<f64> for PrimitiveValue {
     }
 }
 
+impl From<String> for PrimitiveValue {
+    fn from(s: String) -> PrimitiveValue {
+        PrimitiveValue::String(s.leak().as_bytes() as *const [u8])
+    }
+}
+
+impl From<&'static str> for PrimitiveValue {
+    fn from(s: &'static str) -> PrimitiveValue {
+        PrimitiveValue::String(s.as_bytes() as *const [u8])
+    }
+}
+
 impl TryFrom<PrimitiveValue> for f64 {
     type Error = ConversionError;
     fn try_from(p: PrimitiveValue) -> Result<f64, Self::Error> {

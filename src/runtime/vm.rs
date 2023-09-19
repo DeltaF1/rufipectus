@@ -94,7 +94,8 @@ pub fn run(
                         Value::Primitive(runtime::PrimitiveValue::Boolean(b))
                     },
                     bytecode::Primitive::String(n) => {
-                        Value::Primitive(runtime::PrimitiveValue::String(todo!("Fetch bytes from binary")))
+                        let string = &binary.strings[n as usize];
+                        Value::Primitive(runtime::PrimitiveValue::String(&**string as *const[u8]))
                     }
                 };
                 ctx.stack.push(value);
