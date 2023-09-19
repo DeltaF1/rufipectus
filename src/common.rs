@@ -27,6 +27,17 @@ pub enum GlobalClassSlots {
     End,
 }
 
+impl TryFrom<usize> for GlobalClassSlots {
+    type Error = ();
+    fn try_from(u: usize) -> Result<Self, Self::Error> {
+        if u >= (Self::End as usize) {
+            Err(())
+        } else {
+            Ok(unsafe { std::mem::transmute(u) })
+        }
+    }
+}
+
 pub static GlobalClassNames: [&'static str; GlobalClassSlots::End as usize] = [
     /* The cyclical powerhouse */
     "Object", "Class", /* Primitive classes */
