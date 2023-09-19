@@ -101,10 +101,21 @@ pub struct CompilerState<'text> {
     strings: Vec<&'text str>,
 }
 
+#[derive(Debug, Default, Clone, Copy)]
+enum MethodType {
+    Constructor,
+    Static,
+    Foreign,
+    #[default]
+    Normal,
+}
+
 #[derive(Default, Debug)]
 struct MethodContext<'text> {
     locals: Scope<'text>,
     args: Scope<'text>,
+    sig: Option<Signature<'text>>,
+    typ: MethodType,
 }
 
 enum NameType {
@@ -675,27 +686,24 @@ impl<'text> CompilerState<'text> {
         while peek_next_token(i).expect("EOF when parsing class body") != "}" {
             let mut binding = ref_self.borrow_mut();
             let specifier = peek_next_token(i).unwrap();
-            enum MethodType {
-                Constructor,
-                Static,
-                Foreign,
-                Normal,
-            }
-            let method_type;
-            match specifier {
+            let method_type = match specifier {
                 "construct" => {
-                    method_type = MethodType::Constructor;
                     next_token(i);
+                    MethodType::Constructor
                 }
                 "static" => {
-                    method_type = MethodType::Static;
                     next_token(i);
+                    MethodType::Static
                 }
                 "foreign" => todo!(),
-                _ => method_type = MethodType::Normal,
-            }
-            let old_method = binding.current_method.replace(MethodContext::default());
+                _ => MethodType::Normal,
+            };
+            let old_method = binding.current_method.replace(MethodContext {
+                typ: method_type,
+                ..Default::default()
+            });
             let sig = binding.parse_sig(i);
+            binding.current_method.as_mut().unwrap().sig = Some(sig.clone());
             let body = binding.parse_method_body(i);
 
             let class = binding
@@ -706,7 +714,8 @@ impl<'text> CompilerState<'text> {
             match method_type {
                 MethodType::Normal => class.add_method(sig, body),
                 MethodType::Constructor => class.add_constructor(sig, body),
-                _ => todo!(),
+                MethodType::Static => class.add_static_method(sig, body),
+                MethodType::Foreign => todo!(),
             };
             binding.current_method = old_method;
             drop(binding);

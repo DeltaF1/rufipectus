@@ -629,7 +629,12 @@ impl<'a> ClassBuilder<'a> {
         self.add_constructor(sig, body)
     }
 
-    pub fn add_static_method<F>(&mut self, sig: Signature<'a>, mut f: F) -> &MethodAst<'a>
+    pub fn add_static_method(&mut self, sig: Signature<'a>, body: MethodAst<'a>) -> &MethodAst<'a> {
+        self.meta_class.methods.insert(sig.clone(), body);
+        self.meta_class.methods.get(&sig).unwrap()
+    }
+
+    pub fn add_static_method_with<F>(&mut self, sig: Signature<'a>, mut f: F) -> &MethodAst<'a>
     where
         F: FnMut(&mut Self) -> MethodAst<'a>,
     {
