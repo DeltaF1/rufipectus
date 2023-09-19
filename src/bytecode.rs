@@ -2,6 +2,7 @@ use crate::common::{CodeAddress, StringAddress};
 use crate::Arity;
 use std::borrow::Cow;
 use std::collections::HashMap;
+use std::mem::MaybeUninit;
 
 #[derive(Debug, Clone, Copy)]
 pub struct Signature {
@@ -23,8 +24,11 @@ pub enum Primitive {
     Null,
 }
 
-impl From<i32> for Primitive {
-    fn from(i: i32) -> Self {
+impl<T> From<T> for Primitive
+where
+    T: Into<f64>,
+{
+    fn from(i: T) -> Self {
         Primitive::Number(i.into())
     }
 }
@@ -48,6 +52,25 @@ impl NativeCall {
 
     fn discriminant(&self) -> u32 {
         unsafe { (self as *const NativeCall as *const u32).read() }
+    }
+
+    /// # Safety
+    ///
+    /// n must be < u32::MAX
+    fn from_built_in(n: u32) -> Self {
+        let mut maybe = MaybeUninit::<NativeCall>::uninit();
+        // SAFETY: NativeCall is repr(u32)
+        unsafe {
+            if n == u32::MAX {
+                panic!()
+            }
+            (maybe.as_mut_ptr() as *mut u32).write(n);
+            maybe.assume_init()
+        }
+    }
+
+    pub fn from_user_defined(n: u32) -> Self {
+        NativeCall::UserDefined(n)
     }
 }
 
@@ -148,7 +171,7 @@ impl Op {
             | Op::WriteField(_)
             | Op::PopIntoGlobal(_)
             | Op::PushGlobal(_) => 5,
-            Op::Jump(_) => 5,
+            Op::Jump(_) | Op::JumpIf(_) => 5,
             Op::NativeCall(_) => 5,
             _ => 1,
         }
@@ -176,6 +199,7 @@ impl Op {
                 output.extend_from_slice(&address.to_le_bytes());
             }
             Jump(offset) => output.extend_from_slice(&offset.to_le_bytes()),
+            JumpIf(offset) => output.extend_from_slice(&offset.to_le_bytes()),
             PushArg(n) | ReadField(n) | WriteField(n) | PopIntoGlobal(n) | PushGlobal(n) => {
                 output.extend_from_slice(&(u32::try_from(*n).unwrap()).to_le_bytes())
             }
@@ -242,7 +266,15 @@ impl Op {
             0x1f => Op::RetNull,
             0x20 => Op::Yield,
             0x21 => Op::YieldNull,
-            0x22 => Op::NativeCall(todo!()),
+            0x22 => {
+                let discriminant = read_u32!(i);
+                let native = if discriminant < u32::MAX {
+                    NativeCall::from_built_in(discriminant)
+                } else {
+                    NativeCall::from_user_defined(read_u32!(i))
+                };
+                Op::NativeCall(native)
+            }
             _ => panic!("No opcode for byte {opcode}"),
         })
     }
@@ -407,6 +439,12 @@ impl<'a> From<&'a str> for AssemblerAddress<'a> {
     }
 }
 
+impl<'a> From<&'a str> for AssemblerOffset<'a> {
+    fn from(s: &'a str) -> AssemblerOffset<'a> {
+        AssemblerOffset::Lookup(s.into())
+    }
+}
+
 #[derive(Debug)]
 pub struct MissingLabels {
     labels: Vec<String>,
@@ -448,6 +486,18 @@ impl<'text> Assembler<'text> {
             current_path: vec![],
             state: Default::default(),
         }
+    }
+
+    pub fn from_section(section: Section<'text>) -> Self {
+        let mut new = Assembler::new();
+        new.insert_tree("".into(), section);
+        new
+    }
+
+    pub fn from_ops(ops: &[Op]) -> Self {
+        let mut new = Assembler::new();
+        new.add_ops(ops);
+        new
     }
 
     pub fn add_ops(&mut self, ops: &[Op]) {
@@ -520,6 +570,10 @@ impl<'text> Assembler<'text> {
                 section.push(VariableOp::JumpIf(lookup).into())
             }
         }
+    }
+
+    pub fn emit_literal<T: Into<Primitive>>(&mut self, value: T) {
+        self.emit_op(Op::PushPrimitive(value.into()));
     }
 
     // FIXME: dirty is never called
@@ -650,6 +704,14 @@ impl<'text> Assembler<'text> {
                     FixupType::CodeAddress => {
                         (&mut output[fixup.location..fixup.location + 4])
                             .copy_from_slice(&target.to_le_bytes());
+                    }
+                    FixupType::CodeOffset => {
+                        // Add 4 since ip will have moved forward to account for the length of the instruction
+                        let location: i32 = ((fixup.location + 4).try_into().unwrap());
+                        let target: i32 = (*target).try_into().unwrap();
+                        let diff = target - location;
+                        (&mut output[fixup.location..fixup.location + 4])
+                            .copy_from_slice(&diff.to_le_bytes());
                     }
                     x => todo!("Fixup {x:?}"),
                 }
