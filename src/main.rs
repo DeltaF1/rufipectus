@@ -1455,6 +1455,7 @@ fn main() {
     let (assembled, debug) = pall.lower(&parsed, &mut augur);
     //dbg!(&assembled);
 
+    runtime::warmup();
     dbg!(runtime::run(&assembled, &debug, assembled.start));
     panic!();
     let mut globals = Scope::new();

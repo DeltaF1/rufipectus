@@ -83,18 +83,34 @@ fn bootstrap_class() -> (ObjectRef, ObjectRef, ObjectRef) {
 
     // Object metaclass.supertype = Class
     object_meta.borrow_fields_mut()[1] = class.clone().into();
+    object_meta.borrow_fields_mut()[ClassStructure::Name as usize] = "Object metaclass".into();
 
     let object = ObjectRef::new(
         object_meta.clone(),
         exact_repeat::exact_repeat(CLASS_NUM_FIELDS, Value::null()),
     );
 
+    object.borrow_fields_mut()[ClassStructure::NumFields as usize] = 0f64.into();
+    object.borrow_fields_mut()[ClassStructure::Name as usize] = "Object".into();
+
     // Class.num_fields = 4
-    class.borrow_fields_mut()[0] = (CLASS_NUM_FIELDS as f64).into();
+    class.borrow_fields_mut()[ClassStructure::NumFields as usize] =
+        (CLASS_NUM_FIELDS as f64).into();
     // Class.supertype = Object
-    class.borrow_fields_mut()[1] = object.clone().into();
+    class.borrow_fields_mut()[ClassStructure::Supertype as usize] = object.clone().into();
+    class.borrow_fields_mut()[ClassStructure::Name as usize] = "Class".into();
 
     (class, object, object_meta)
+}
+
+pub fn warmup() {
+    let (class, object, _) = bootstrap_class();
+
+    unsafe {
+        GLOBAL_STATE.resize_with(GlobalClassSlots::End as usize, Value::null);
+        GLOBAL_STATE[GlobalClassSlots::Object as usize] = object.into();
+        GLOBAL_STATE[GlobalClassSlots::Class as usize] = class.into();
+    }
 }
 
 static mut GLOBAL_STATE: Vec<Value> = vec![];
