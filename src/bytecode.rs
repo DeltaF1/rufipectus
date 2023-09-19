@@ -673,20 +673,27 @@ impl<'text> Assembler<'text> {
         Ok(())
     }
 
-    pub fn assemble(&mut self) -> Result<Binary, MissingLabels> {
+    // TODO: Create a DebugSymbols struct that lets you look up the closest label for a given ip
+    pub fn assemble(&mut self) -> Result<(Binary, DebugSymbols<'text>), MissingLabels> {
         self.get_or_generate();
         match &self.state {
             IntermediateState::Sized(assembly) => Err(MissingLabels {
                 labels: assembly.fixups.iter().map(|f| f.key.join("/")).collect(),
             }),
-            IntermediateState::Complete(assembly) => Ok(Binary {
-                bytes: assembly.generated.clone(),
-                start: self.address_of_label(&["_start"]).unwrap_or_else(|()| {
-                    dbg!("Warning: Assembled without _start, returning 0");
-                    0
-                }),
-                strings: vec![],
-            }),
+            IntermediateState::Complete(assembly) => {
+                let debug = assembly.debug_symbols();
+                Ok((
+                    Binary {
+                        bytes: assembly.generated.clone(),
+                        start: self.address_of_label(&["_start"]).unwrap_or_else(|()| {
+                            dbg!("Warning: Assembled without _start, returning 0");
+                            0
+                        }),
+                        strings: vec![],
+                    },
+                    debug,
+                ))
+            }
             IntermediateState::Dirty => unreachable!(),
         }
     }
@@ -785,6 +792,34 @@ struct Assembly<'text> {
     labels: HashMap<Vec<Cow<'text, str>>, CodeAddress>,
     fixups: Vec<Fixup<'text>>,
     generated: Vec<u8>,
+}
+
+#[derive(Default, Clone)]
+pub struct DebugSymbols<'text> {
+    pub labels: Vec<Cow<'text, str>>,
+}
+
+impl<'text> Assembly<'text> {
+    // TODO: The Cow is a lie, this is just a million String's
+    fn debug_symbols<'a>(&'a self) -> DebugSymbols<'text> {
+        let mut label_table: Vec<Option<Cow<'text, str>>> = vec![None; self.generated.len()];
+        for (label, addr) in &self.labels {
+            let label = "/".to_owned() + &label.join("/");
+            label_table[*addr as usize] = Some(label.into());
+        }
+
+        let mut previous = None;
+        for i in label_table.iter_mut() {
+            match i {
+                None => *i = previous.clone(),
+                Some(_) => previous = i.clone(),
+            }
+        }
+
+        DebugSymbols {
+            labels: label_table.into_iter().map(|o| o.unwrap()).collect(),
+        }
+    }
 }
 
 #[test]

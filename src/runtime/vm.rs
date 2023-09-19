@@ -1,4 +1,4 @@
-use crate::bytecode::{self, Binary};
+use crate::bytecode::{self, Binary, DebugSymbols};
 use crate::bytecode::{NativeCall, Op};
 use crate::runtime;
 use crate::runtime::CodeAddress;
@@ -6,14 +6,22 @@ use crate::runtime::SafeFloatToInt;
 use crate::runtime::Value;
 use std::error::Error;
 
-pub fn run(binary: &Binary, address: CodeAddress) -> Result<Value, Box<dyn Error>> {
+pub fn run(
+    binary: &Binary,
+    symbols: &DebugSymbols,
+    address: CodeAddress,
+) -> Result<Value, Box<dyn Error>> {
     let mut ctx = runtime::ExecutionContext::new(address);
     loop {
         let mut iter = (binary.bytes[(ctx.ip as usize)..]).iter().copied();
 
+        dbg!(&ctx);
         let op = Op::deserialize(&mut iter).unwrap();
+        println!(
+            "({})[{}] {:?}",
+            symbols.labels[ctx.ip as usize], ctx.ip, &op
+        );
         ctx.ip += TryInto::<CodeAddress>::try_into(op.len()).unwrap();
-        dbg!(&ctx, op);
         match op {
             Op::Dup => {
                 let top = ctx.stack.top().clone();

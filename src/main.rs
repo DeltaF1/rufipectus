@@ -1181,7 +1181,7 @@ impl<'a, 'text> PallBearer {
         &mut self,
         module: &'a parser::Module<'text>,
         augur: &mut Augur<'a, 'text>,
-    ) -> bytecode::Binary {
+    ) -> (bytecode::Binary, bytecode::DebugSymbols<'text>) {
         for string in &module.strings {
             self.strings.push(string.to_string());
         }
@@ -1196,14 +1196,19 @@ impl<'a, 'text> PallBearer {
         });
         dbg!(&asm);
 
-        let mut binary = asm.assemble().unwrap();
+        // TODO: emit a "Fault" opcode here to prevent falling off the end of the top level code
+
+        // TODO: If any Dynamic calls were emitted, write down any matching sigs
+        // TODO: Fixup class objects to point to their method lists
+
+        let (mut binary, debug) = asm.assemble().unwrap();
         binary.strings = self
             .strings
             .iter()
             .map(|s| s.clone().into_bytes().into_boxed_slice())
             .collect();
 
-        binary
+        (binary, debug)
     }
 
     fn lower_class(
@@ -1447,13 +1452,11 @@ fn main() {
     dbg!(&augur.types);
 
     let mut pall = PallBearer::new();
-    let assembled = pall.lower(&parsed, &mut augur);
-    dbg!(&assembled);
+    let (assembled, debug) = pall.lower(&parsed, &mut augur);
+    //dbg!(&assembled);
 
-    runtime::run(&assembled, assembled.start);
-
+    dbg!(runtime::run(&assembled, &debug, assembled.start));
     panic!();
-
     let mut globals = Scope::new();
     let mut classes: Vec<Rc<ClassDef>> = vec![];
     let mut Rectangle = ClassBuilder::new("Rectangle");
