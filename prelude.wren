@@ -59,10 +59,12 @@ class Bool {
 
 class Num {}
 class String {}
-class Range {}
-class Null
+class Null {
+    ! { true }
+}
 
 class Sequence {}
+class Range is Sequence {}
 class List is Sequence {}
 class Map is Sequence {}
 class Fn {}

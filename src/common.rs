@@ -12,11 +12,12 @@ pub enum GlobalClassSlots {
     Bool,
     Num,
     String,
-    Range,
+
     Null,
 
     /* Built-in classes */
     Sequence,
+    Range,
     List,
     Map,
     Fn,
@@ -29,6 +30,6 @@ pub enum GlobalClassSlots {
 pub static GlobalClassNames: [&'static str; GlobalClassSlots::End as usize] = [
     /* The cyclical powerhouse */
     "Object", "Class", /* Primitive classes */
-    "Bool", "Num", "String", "Range", "Null", /* Built-in classes */
-    "Sequence", "List", "Map", "Fn", "Fiber", "System",
+    "Bool", "Num", "String", "Null", /* Built-in classes */
+    "Sequence", "Range", "List", "Map", "Fn", "Fiber", "System",
 ];
