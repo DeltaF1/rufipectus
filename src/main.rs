@@ -1819,7 +1819,7 @@ fn main() {
     //dbg!(&assembled);
 
     runtime::warmup();
-    let ret = runtime::run(&assembled, &debug, assembled.start).unwrap();
+    let ret = runtime::run(&assembled, Some(&debug), assembled.start).unwrap();
     println!("{:?}", ret);
 }
 

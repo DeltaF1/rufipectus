@@ -8,7 +8,7 @@ use std::error::Error;
 
 pub fn run(
     binary: &Binary,
-    symbols: &DebugSymbols,
+    symbols: Option<&DebugSymbols>,
     address: CodeAddress,
 ) -> Result<Value, Box<dyn Error>> {
     let mut ctx = runtime::ExecutionContext::new(address);
@@ -19,7 +19,7 @@ pub fn run(
         let op = Op::deserialize(&mut iter).unwrap();
         println!(
             "({})[{}] {:?}",
-            symbols.labels[ctx.ip as usize], ctx.ip, &op
+            symbols.map(|s| -> &str {&s.labels[ctx.ip as usize]}).unwrap_or("???"), ctx.ip, &op
         );
         ctx.ip += TryInto::<CodeAddress>::try_into(op.len()).unwrap();
         match op {
@@ -170,7 +170,7 @@ mod test {
             asm.assemble().unwrap()
         };
 
-        let output = run(&binary, 0).unwrap();
+        let output = run(&binary.0, Some(&binary.1), 0).unwrap();
         assert_eq!(output, 69.0.into());
     }
 
@@ -356,7 +356,7 @@ mod test {
             runtime::GLOBAL_STATE[GlobalClassSlots::Class as usize] = class.into();
         }
 
-        let output = run(&binary, start);
+        let output = run(&binary.0, Some(&binary.1), start);
         dbg!(&output);
         assert_eq!(output.unwrap(), 100.0.into());
     }

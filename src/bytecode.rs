@@ -938,7 +938,6 @@ fn test_assembler() {
         asm.emit_op(Op::Ret);
     });
 
-    dbg!(asm.assemble());
     assert_eq!(asm.address_of_label(&["start"]), Ok(0));
     assert_eq!(asm.address_of_label(&["start", "loop"]), Ok(0));
     assert_eq!(asm.address_of_label(&["first"]), Ok(33));

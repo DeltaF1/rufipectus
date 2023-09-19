@@ -841,6 +841,7 @@ mod test {
     use super::*;
     #[test]
     fn peeking() {
+        use std::fs::File;
         let mut f = File::open("test.wren").unwrap();
         let s = {
             let mut s = String::new();
