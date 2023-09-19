@@ -1,7 +1,7 @@
 class Object {
     static same(obj1, obj2) {
-        return #asm (obj1, obj2) {
-            native ObjectSame
+        return ;asm (obj1, obj2) {
+            /* native ObjectSame */
         }
     }
 
@@ -14,28 +14,20 @@ class Object {
     toString { "Object" }
 
     type {
-        return #asm(this) {
-            class
+        return ;asm(this) {
+            /* class */
         }
     }
 }
 
-class Class {
-    // TODO: Class constructor magic
-    construct new(num_fields, supertype) {
-        _numFields = num_fields
-        _supertype = supertype
-        _name = ""
-        _methods = null
-    }
-
+class Class is Object {
     name {
-        return #asm(this) {
-            read_field ClassStructure::Name
+        return ;asm(this) {
+            /* read_field ClassStructure::Name */
         }
     }
 
-    supertype { #asm(this) { read_field ClassStruct::Supertype } }
+    supertype { ;asm(this) { /* read_field ClassStructure::Supertype */ } }
 }
 
 /* Primitive classes */
@@ -57,7 +49,15 @@ class Bool {
     }
 }
 
-class Num {}
+class Num {
+    *(other) {
+        return ;asm(this, other) {
+            /* native Multiply */
+			0x22 0x01 0x00 0x00 0x00
+        }
+    }
+}
+
 class String {}
 class Null {
     ! { true }

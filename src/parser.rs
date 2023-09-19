@@ -278,12 +278,70 @@ fn consume_next_token_if<'text>(
 impl<'text> CompilerState<'text> {
     fn parse_expr(&mut self, i: &mut StringStream<'text>) -> Expression<'text> {
         let tok = next_token(i).unwrap();
-
         // TODO: Parse floats
         let place = if tok.chars().nth(0).unwrap().is_numeric() {
             Expression::Primitive(Primitive::Number(tok.parse::<u32>().unwrap().into()))
         } else {
             match tok {
+                ";" => {
+                    // The only symbol not in use
+                    match consume_next_token_if(i, "asm") {
+                        Some(Consumed::Expected) => {
+                            let mut args = vec![];
+                            if let Consumed::Expected = consume_next_token_if(i, "(").unwrap() {
+                                loop {
+                                    match peek_next_token(i).unwrap() {
+                                        "," => panic!("Too many commas"),
+                                        ")" => break,
+                                        _ => (),
+                                    }
+
+                                    args.push(self.parse_expr(i));
+                                    match peek_next_token(i).unwrap() {
+                                        "," => {
+                                            next_token(i);
+                                            continue;
+                                        }
+                                        ")" => break,
+                                        _ => panic!(),
+                                    }
+                                }
+                                assert_eq!(next_token(i), Some(")"));
+                            }
+
+                            assert_eq!(next_token(i), Some("{"));
+                            let mut asm = crate::bytecode::Assembler::new();
+                            let mut bytes = vec![];
+                            loop {
+                                let byte = next_token(i).unwrap();
+                                // fragile to stray } inside the asm
+                                if byte == "}" {
+                                    break;
+                                }
+
+                                let stripped = byte.strip_prefix("0x").unwrap_or(byte);
+                                dbg!(stripped);
+                                let byte = u8::from_str_radix(stripped, 16).unwrap();
+                                bytes.push(byte);
+                            }
+                        dbg!(&bytes);
+
+                            let mut iter = bytes.into_iter();
+
+                            use crate::bytecode;
+                            while let Some(op) = bytecode::Op::deserialize(&mut iter) {
+                                asm.emit_op(op);
+                            }
+
+                            let section = asm.into_tree();
+
+                            Expression::InlineAsm(args, section)
+                        }
+                        _ => {
+                            panic!("';' is not a valid token unless followed by the string 'asm'")
+                        }
+                    }
+                }
                 "\"" => Expression::Primitive(Primitive::String(self.parse_string(i))),
                 "[" => todo!("List literals"),
                 "{" => todo!("Dictionary literals"),
