@@ -114,8 +114,45 @@ pub fn run(
                 }
             }
             Op::CallDirect(arity, address) => ctx.call(arity, address),
-            Op::CallNamed(_signature) => {
-                todo!("Runtime method lookup")
+            Op::CallNamed(arity, signature) => {
+                let top = ctx.stack.top();
+                let class = top.get_class();
+                let mut lookup_ptr: usize = {
+                    let methods = class.borrow_fields()[runtime::ClassStructure::Methods as usize].clone();
+                    let float: f64 = methods.try_into().unwrap();
+                    float.to_int().unwrap()
+                };
+
+                const ENTRY_SIZE: usize = 8;
+                let method_address = loop {
+                    let sig = u32::from_le_bytes((&binary.bytes[lookup_ptr..lookup_ptr+4]).try_into().unwrap());
+                    let code_location = u32::from_le_bytes((&binary.bytes[lookup_ptr+4..lookup_ptr+8]).try_into().unwrap());
+                    if sig == 0xffffffff {
+                        // End of the class's method dict
+                        break None
+                        // In future code_location could signal to skip backwards until the
+                        // superclass is reached
+                    } else if sig == signature {
+                        break Some(code_location)
+                    }
+
+                    // TOOD: In future iterate backwards for the inheritance structure
+                    lookup_ptr += ENTRY_SIZE;
+                };
+
+                let method_address = match method_address {
+                    Some(a) => a,
+                    None => {
+                        let slice = &binary.strings[signature as usize];
+                        let sig_name = std::str::from_utf8(slice).unwrap_or_else(|_|"broken utf8");
+
+                        let class_name = &class.borrow_fields()[runtime::ClassStructure::Name as usize];
+
+                        panic!("No method {} found for class {:?}", sig_name, class_name)
+                    }
+                };
+
+                ctx.call(arity, method_address);
             }
             Op::Ret => ctx.ret(),
             Op::RetNull => {
@@ -160,9 +197,9 @@ mod test {
             asm.emit_call(2, "first".into());
             asm.emit_op(Op::Yield);
             asm.with_section("first", |asm| {
-            // fn first(a, b) {
-            //      return a
-            //  }
+                // fn first(a, b) {
+                //      return a
+                //  }
                 asm.emit_op(Op::Pop);
                 asm.emit_op(Op::Yield);
             });

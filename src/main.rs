@@ -1351,8 +1351,26 @@ impl<'a, 'text> PallBearer {
 
         // TODO: emit a "Fault" opcode here to prevent falling off the end of the top level code
 
+        asm.with_section("method dicts", |asm| {
+            for class in &module.classes {
+                asm.label(class.name.clone());
+                let mut next: Option<&Rc<ClassDef>> = Some(class);
+                while let Some(current) = next {
+                    for (sig, _) in &current.methods {
+                        let sig = format!("{}", sig);
+                        let addr = Lookup::Absolute(vec![
+                            "classes".into(),
+                            current.name.clone(),
+                            sig.clone().into(),
+                        ]);
+                        asm.emit_method_dict_entry(self.intern_string(&sig), addr.into());
+                    }
+                    next = current.parent.as_ref();
+                }
+                asm.emit_method_dict_entry(u32::MAX, 0u32.into());
+            }
+        });
         // TODO: If any Dynamic calls were emitted, write down any matching sigs
-        // TODO: Fixup class objects to point to their method lists
 
         let (mut binary, debug) = asm.assemble().unwrap();
         binary.strings = self
@@ -1542,6 +1560,7 @@ impl<'a, 'text> PallBearer {
 
                 match augur.resolve_call_target(&receiver_type, ast_sig.into()) {
                     CallTarget::Dynamic(sig) => asm.emit_op(bytecode::Op::CallNamed(
+                        sig.arity.arity() + 1,
                         self.intern_string(sig.to_string()).into(),
                     )),
                     CallTarget::Static(class, sig) => asm.emit_call(
@@ -1645,7 +1664,10 @@ impl<'a, 'text> PallBearer {
                     asm.emit_literal(object_fields);
                     // superclass
                     asm.emit_op(Op::PushGlobal(*super_class_slot));
-                    // TODO: push primitive address fixup for method dict
+                    // methods
+                    asm.emit_deferred_address(
+                        Lookup::Absolute(vec!["method dicts".into(), class_name.clone()]).into(),
+                    );
                     asm.emit_op(Op::PushPrimitive(bytecode::Primitive::String(
                         self.intern_string(class_name.clone()),
                     )));
@@ -1653,6 +1675,11 @@ impl<'a, 'text> PallBearer {
                     asm.emit_literal(static_fields);
                     // Class (metaclass's superclass)
                     asm.emit_op(Op::PushGlobal(GlobalClassSlots::Class as usize));
+                    // metaclass's methods
+                    asm.emit_deferred_address(
+                        Lookup::Absolute(vec!["method dicts".into(), meta_name.clone()]).into(),
+                    );
+                    // metaclass's name
                     asm.emit_op(Op::PushPrimitive(bytecode::Primitive::String(
                         self.intern_string(meta_name.clone()),
                     )));
@@ -1666,6 +1693,7 @@ impl<'a, 'text> PallBearer {
                     asm.emit_op(Op::PopThis);
                     // write_field ClassStructure::Supertype
                     asm.emit_op(Op::WriteField(ClassStructure::Name as usize));
+                    asm.emit_op(Op::WriteField(ClassStructure::Methods as usize));
                     asm.emit_op(Op::WriteField(ClassStructure::Supertype as usize));
                     // DUP
                     asm.emit_op(Op::Dup);
@@ -1681,6 +1709,7 @@ impl<'a, 'text> PallBearer {
                     asm.emit_op(Op::PopThis);
                     // - write_field ClassStructure::Supertype
                     asm.emit_op(Op::WriteField(ClassStructure::Name as usize));
+                    asm.emit_op(Op::WriteField(ClassStructure::Methods as usize));
                     asm.emit_op(Op::WriteField(ClassStructure::Supertype as usize));
                     // - write_field ClassStructure::num_fields
                     asm.emit_op(Op::WriteField(ClassStructure::NumFields as usize));
@@ -1690,50 +1719,6 @@ impl<'a, 'text> PallBearer {
                     asm.emit_op(Op::Ret);
                     asm.label("end".into());
                 });
-                /*
-                Class.new(
-                    {num_fields},
-                    Class.new({static_num_fields}, ;asm {pushg {super_class_slot}}
-                )
-
-
-                asm.emit_op(bytecode::Op::PushPrimitive(bytecode::Primitive::Number(
-                    object_fields.into(),
-                )));
-                // FIXME: Allow for local class slots
-                asm.emit_op(bytecode::Op::PushGlobal(*super_class_slot));
-                {
-                    let metaclass = class.0.metaclass.as_ref().unwrap();
-                    let static_fields: u32 = metaclass.fields.len().try_into().unwrap();
-                    asm.emit_op(bytecode::Op::PushPrimitive(bytecode::Primitive::Number(
-                        static_fields.into(),
-                    )));
-                    asm.emit_op(bytecode::Op::PushGlobal(
-                        common::GlobalClassSlots::Class as usize,
-                    ));
-                    asm.emit_op(bytecode::Op::Dup);
-                    asm.emit_call(
-                        3,
-                        Lookup::Absolute(vec![
-                            "classes".into(),
-                            "Class metaclass".into(),
-                            "new(_,_)".into(),
-                        ])
-                        .into(),
-                    );
-                }
-                // Our metaclass is now on the stack
-                asm.emit_call(
-                    3,
-                    Lookup::Absolute(vec![
-                        "classes".into(),
-                        "Class metaclass".into(),
-                        "new(_,_)".into(),
-                    ])
-                    .into(),
-                );
-                */
-                // metaclass.new(class.num_fields, superclass)
                 // TODO: Pointer to method lookup
             }
             Expression::Construct => {
@@ -1748,7 +1733,9 @@ impl<'a, 'text> PallBearer {
 }
 
 fn main() {
-    let file_name = std::env::args().nth(1).expect("Please provide the name of a wren file to run");
+    let file_name = std::env::args()
+        .nth(1)
+        .expect("Please provide the name of a wren file to run");
     // TODO: Yoke?
     let s = {
         let mut f = File::open(file_name).unwrap();

@@ -114,7 +114,7 @@ pub enum Op {
     Jump(i32),
     JumpIf(i32),
     CallDirect(usize, CodeAddress),
-    CallNamed(Signature),
+    CallNamed(usize, StringAddress),
     Ret,
     // TODO: Reuse this for ClassOf or something
     #[deprecated]
@@ -151,7 +151,7 @@ const fn opcode(op: &Op) -> u8 {
         Jump(_) => 0x1a,
         JumpIf(_) => 0x1b,
         CallDirect(_, _) => 0x1c,
-        CallNamed(_) => 0x1d,
+        CallNamed(_, _) => 0x1d,
         Ret => 0x1e,
         RetNull => 0x1f,
         Yield => 0x20,
@@ -165,10 +165,9 @@ impl Op {
         match self {
             // TODO: Length dependent on primitive type
             Op::PushPrimitive(_) => 9,
-            Op::CallDirect(_, _) => 9,
+            Op::CallDirect(_, _) | Op::CallNamed(_, _) => 9,
             Op::PushArg(_)
             | Op::ReadField(_)
-            | Op::CallNamed(_)
             | Op::WriteField(_)
             | Op::PopIntoGlobal(_)
             | Op::PushGlobal(_) => 5,
@@ -194,7 +193,7 @@ impl Op {
                 Primitive::Null => output.extend_from_slice(&0u64.to_le_bytes()),
                 Primitive::String(addr) => output.extend_from_slice(&(*addr as u64).to_le_bytes()),
             },
-            CallDirect(arity, address) => {
+            CallDirect(arity, address) | CallNamed(arity, address) => {
                 let arity: u32 = (*arity).try_into().unwrap();
                 output.extend_from_slice(&arity.to_le_bytes());
                 output.extend_from_slice(&address.to_le_bytes());
@@ -204,7 +203,6 @@ impl Op {
             PushArg(n) | ReadField(n) | WriteField(n) | PopIntoGlobal(n) | PushGlobal(n) => {
                 output.extend_from_slice(&(u32::try_from(*n).unwrap()).to_le_bytes())
             }
-            CallNamed(sig) => output.extend_from_slice(&sig.name.to_le_bytes()),
             NativeCall(native) => output.extend_from_slice(&native.discriminant().to_le_bytes()),
             Yield | Pop | Ret | PopThis | PushThis | Dup => {}
             x => todo!("Serialize {x:?}"),
@@ -262,7 +260,7 @@ impl Op {
             0x1a => Op::Jump(read_u32!(i) as i32),
             0x1b => Op::JumpIf(read_u32!(i) as i32),
             0x1c => Op::CallDirect(read_u32!(i) as usize, read_u32!(i) as CodeAddress),
-            0x1d => Op::CallNamed((read_u32!(i) as StringAddress).into()),
+            0x1d => Op::CallNamed(read_u32!(i) as usize, read_u32!(i) as StringAddress),
             0x1e => Op::Ret,
             0x1f => Op::RetNull,
             0x20 => Op::Yield,
@@ -308,6 +306,8 @@ enum VariableOp<'a> {
     Jump(Lookup<'a>),
     JumpIf(Lookup<'a>),
     CallDirect(usize, Lookup<'a>),
+    LiteralAddress(Lookup<'a>),
+    ImmediateAddress(Lookup<'a>),
     // TODO: Any more opcodes that we want to be able to reference variables
 }
 
@@ -376,6 +376,7 @@ enum AssemblerNode<'a> {
     Section(Cow<'a, str>, Vec<AssemblerNode<'a>>),
     Label(Cow<'a, str>),
     Op(AssemblerOp<'a>),
+    Data(u32),
 }
 
 #[derive(Debug, Clone)]
@@ -464,6 +465,7 @@ enum FixupType {
     CodeAddress,
     CodeOffset,
     DataAddress,
+    CodeAddressf64,
 }
 
 #[derive(Debug)]
@@ -577,6 +579,34 @@ impl<'text> Assembler<'text> {
         self.emit_op(Op::PushPrimitive(value.into()));
     }
 
+    pub fn emit_deferred_address(&mut self, address: AssemblerAddress<'text>) {
+        match address {
+            AssemblerAddress::Known(addr) => self.emit_literal(addr),
+            AssemblerAddress::Lookup(lookup) => {
+                let section = self.current_section().get_vec_mut();
+                section.push(VariableOp::LiteralAddress(lookup).into());
+            }
+        }
+    }
+
+    pub fn emit_data(&mut self, data: u32) {
+        let section = self.current_section().get_vec_mut();
+        section.push(AssemblerNode::Data(data));
+    }
+
+    pub fn emit_method_dict_entry(&mut self, sig: StringAddress, target: AssemblerAddress<'text>) {
+        self.emit_data(sig);
+        match target {
+            AssemblerAddress::Known(addr) => {
+                self.emit_data(addr);
+            }
+            AssemblerAddress::Lookup(lookup) => {
+                let section = self.current_section().get_vec_mut();
+                section.push(VariableOp::ImmediateAddress(lookup).into());
+            }
+        }
+    }
+
     // FIXME: dirty is never called
     fn dirty(&mut self) {
         self.state = IntermediateState::Dirty
@@ -680,9 +710,45 @@ impl<'text> Assembler<'text> {
 
                                     Op::CallDirect(*arity, address).serialize(output);
                                 }
+                                VariableOp::LiteralAddress(lookup) => {
+                                    let address: CodeAddress;
+                                    let absolute_key = lookup.resolve(current_section);
+                                    let target = labels.get(&absolute_key);
+                                    if let Some(shortcut) = target {
+                                        address = *shortcut;
+                                    } else {
+                                        address = 0;
+                                        fixups.push(Fixup {
+                                            key: absolute_key,
+                                            location: output.len() + 1, // Account for the PushPrimitive opcode
+                                            typ: FixupType::CodeAddressf64,
+                                        });
+                                    }
+
+                                    Op::PushPrimitive(address.into()).serialize(output);
+                                }
+                                VariableOp::ImmediateAddress(lookup) => {
+                                    let address: CodeAddress;
+                                    let absolute_key = lookup.resolve(current_section);
+                                    let target = labels.get(&absolute_key);
+                                    if let Some(shortcut) = target {
+                                        address = *shortcut;
+                                    } else {
+                                        address = 0;
+                                        fixups.push(Fixup {
+                                            key: absolute_key,
+                                            location: output.len(),
+                                            typ: FixupType::CodeAddress,
+                                        });
+                                    }
+                                    output.extend_from_slice(&address.to_le_bytes());
+                                }
                             }
                         }
                     }
+                }
+                AssemblerNode::Data(u) => {
+                    output.extend_from_slice(&u.to_le_bytes());
                 }
             }
         }
@@ -713,6 +779,12 @@ impl<'text> Assembler<'text> {
                         let diff = target - location;
                         (&mut output[fixup.location..fixup.location + 4])
                             .copy_from_slice(&diff.to_le_bytes());
+                    }
+                    FixupType::CodeAddressf64 => {
+                        let target: f64 = (*target).into();
+
+                        (&mut output[fixup.location..fixup.location + 8])
+                            .copy_from_slice(&target.to_le_bytes());
                     }
                     x => todo!("Fixup {x:?}"),
                 }
@@ -880,7 +952,10 @@ impl<'text> Assembly<'text> {
         }
 
         DebugSymbols {
-            labels: label_table.into_iter().map(|o| o.unwrap_or("???".into())).collect(),
+            labels: label_table
+                .into_iter()
+                .map(|o| o.unwrap_or("???".into()))
+                .collect(),
         }
     }
 }
