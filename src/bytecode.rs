@@ -36,7 +36,10 @@ where
 #[repr(u32)]
 pub enum NativeCall {
     NewObject = 0,
-    Multiply,
+    Same,
+    Multiply = 0x100,
+
+    Print,
 
     /* ... */
     Unimplemented,

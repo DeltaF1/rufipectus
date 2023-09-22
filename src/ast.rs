@@ -73,6 +73,8 @@ pub enum Statement<'a> {
     Return(Expression<'a>),
     Yield(Expression<'a>),
     ExprStatement(Expression<'a>),
+    While(Expression<'a>, Box<Statement<'a>>),
+    For(&'a str, Expression<'a>, Box<Statement<'a>>),
 }
 
 #[derive(Debug, PartialEq)]
@@ -96,6 +98,7 @@ pub enum Expression<'a> {
     Construct,
 }
 
+// TODO: Get rid of unecessary boxes
 #[derive(Debug, PartialEq)]
 pub enum IfBody<'a> {
     ThenElse {

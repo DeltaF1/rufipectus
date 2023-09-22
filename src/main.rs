@@ -1265,7 +1265,12 @@ impl<'a, 'text> Augur<'a, 'text> {
                 let fact = self.typecheck_expr(e);
                 self.types.add_fact(Query::Global(*n), fact);
             }
-            Statement::If(_, _) => todo!(),
+            Statement::If(cond, if_body) => {
+                // TODO: evaluate truthiness
+                self.typecheck_expr(cond);
+                let _t = None;
+                self.typecheck_if(_t, if_body);
+            }
             Statement::Block(v) => {
                 for s in v {
                     self.typecheck_statement(s);
@@ -1281,8 +1286,34 @@ impl<'a, 'text> Augur<'a, 'text> {
             Statement::Yield(e) => {
                 self.typecheck_expr(e);
             }
+            Statement::While(cond, body) => {
+                self.typecheck_expr(cond);
+                self.typecheck_statement(body);
+            }
+            Statement::For(name, seq, body) => {
+                todo!();
+                self.typecheck_statement(body);
+            }
             Statement::ExprStatement(e) => {
                 self.typecheck_expr(e);
+            }
+        }
+    }
+
+    fn typecheck_if(&mut self, _truthiness: Option<bool>, if_body: &IfBody<'text>) {
+        match if_body {
+            IfBody::Then { then } => {
+                self.typecheck_statement(then);
+            }
+            IfBody::ThenElse { then, r#else } => {
+                self.typecheck_statement(then);
+                self.typecheck_statement(r#else);
+            }
+            IfBody::ThenElseIf { then, elseif } => {
+                self.typecheck_statement(then);
+                self.typecheck_expr(&elseif.0);
+                let _t = None;
+                self.typecheck_if(_t, &elseif.1);
             }
         }
     }
@@ -1295,7 +1326,7 @@ impl<'a, 'text> Augur<'a, 'text> {
                 .is_some_and(|t| t == &self.types)
             {
                 if self.types.unresolved_queries.len() > 0 {
-                    panic!("{:?}", self.types.unresolved_queries)
+                    //panic!("{:?}", self.types.unresolved_queries)
                 }
                 break;
             }
@@ -1340,16 +1371,6 @@ impl<'a, 'text> PallBearer {
             self.strings.push(string.to_string());
         }
         let mut asm = Assembler::new();
-        asm.with_section("classes", |asm| {
-            for class in &module.classes {
-                self.lower_class(class, augur, asm)
-            }
-        });
-        asm.with_section("_start", |asm| {
-            self.lower_statement(augur, asm, &module.top_level_ast)
-        });
-
-        // TODO: emit a "Fault" opcode here to prevent falling off the end of the top level code
 
         asm.with_section("method dicts", |asm| {
             for class in &module.classes {
@@ -1370,6 +1391,17 @@ impl<'a, 'text> PallBearer {
                 asm.emit_method_dict_entry(u32::MAX, 0u32.into());
             }
         });
+
+        asm.with_section("classes", |asm| {
+            for class in &module.classes {
+                self.lower_class(class, augur, asm)
+            }
+        });
+        asm.with_section("_start", |asm| {
+            self.lower_statement(augur, asm, &module.top_level_ast)
+        });
+
+        // TODO: emit a "Fault" opcode here to prevent falling off the end of the top level code
         // TODO: If any Dynamic calls were emitted, write down any matching sigs
 
         let (mut binary, debug) = asm.assemble().unwrap();
@@ -1521,6 +1553,22 @@ impl<'a, 'text> PallBearer {
                 self.lower_expression(augur, asm, e);
                 asm.emit_op(bytecode::Op::Yield);
             }
+            Statement::While(cond, body) => {
+                /*asm.with_section("while", |asm| {
+                    asm.label("cond");
+                    self.lower_expression(augur, asm, cond);
+                    asm.emit_jump_if("then");
+                    asm.emit_jump("break");
+
+                    asm.label("then");
+                    self.lower_statement(augur, asm, body);
+                    asm.emit_jump("cond");
+
+                    asm.label("break");
+                });*/
+                todo!("lower while loops")
+            }
+            Statement::For(var_name, sequence, body) => todo!("lower for loops"),
             Statement::ExprStatement(e) => {
                 // TODO: Certain expression types are no-ops in ExprStatement
                 // This can be picked up by peephole optimization but maybe easier to nip in the bud here
@@ -1743,13 +1791,13 @@ fn main() {
         f.read_to_string(&mut s).unwrap();
         s
     };
-    // TODO: include!() the prelude in the binary
-    let prelude = {
+    let prelude = include_str!("prelude.wren");
+    /*{
         let mut file = File::open("prelude.wren").unwrap();
         let mut s = String::new();
         file.read_to_string(&mut s).unwrap();
         s
-    };
+    };*/
 
     let mut parser = parser::Parser::new();
     let mut prelude_ast = parser.feed_text(&prelude);
@@ -1774,7 +1822,6 @@ fn main() {
 
     runtime::warmup();
     let ret = runtime::run(&assembled, Some(&debug), assembled.start).unwrap();
-    println!("{:?}", ret);
 }
 
 // TODO:

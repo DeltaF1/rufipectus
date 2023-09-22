@@ -81,7 +81,7 @@ impl<'text> StringStream<'text> {
             .unwrap_or(self.source.len() - 3);
         let new = current - n;
         let mut new_iter = self.source.chars().enumerate().peekable();
-        {
+        if new > 0 {
             (&mut new_iter).nth(new - 1);
         }
         self.iter = new_iter;
@@ -164,7 +164,7 @@ fn is_word(c: &char) -> bool {
 
 fn is_binary_op(name: &str) -> bool {
     match name {
-        "*" => true,
+        "*" | "+" | "-" | "/" | ">>" | "<<" | "==" | ">" | "<" | "<=" | ">=" | "%" => true,
         _ => false,
     }
 }
@@ -306,7 +306,13 @@ impl<'text> Parser<'text> {
         let tok = next_token(i).unwrap();
         // TODO: Parse floats
         let place = if tok.chars().nth(0).unwrap().is_numeric() {
-            Expression::Primitive(Primitive::Number(tok.parse::<u32>().unwrap().into()))
+            let mut num_string = String::from(tok);
+            if let Some(Consumed::Expected) = consume_next_token_if(i, ".") {
+                num_string += ".";
+                num_string += next_token(i).unwrap();
+            }
+
+            Expression::Primitive(Primitive::Number(num_string.parse::<f64>().unwrap().into()))
         } else {
             match tok {
                 ";" => {
@@ -369,6 +375,11 @@ impl<'text> Parser<'text> {
                 "\"" => Expression::Primitive(Primitive::String(self.parse_string(i))),
                 "[" => todo!("List literals"),
                 "{" => todo!("Dictionary literals"),
+                "(" => {
+                    let e = self.parse_expr(i);
+                    assert_eq!(next_token(i), Some(")"));
+                    e
+                }
                 "this" => Expression::This,
                 "false" => Expression::Primitive(Primitive::Bool(false)),
                 "true" => Expression::Primitive(Primitive::Bool(true)),
@@ -526,6 +537,24 @@ impl<'text> Parser<'text> {
                 }
             }
             "{" => self.parse_block(i, _locals),
+            "while" => {
+                assert_eq!(next_token(i), Some("("));
+                let cond = self.parse_expr(i);
+                assert_eq!(next_token(i), Some(")"));
+                let block = self.parse_statement(i, _locals);
+                todo!("While loops");
+            }
+            "for" => {
+                assert_eq!(next_token(i), Some("("));
+                // TODO: Mutiple var names allowed?
+                let var_name = next_token(i).unwrap();
+                assert_eq!(next_token(i), Some("in"));
+                let sequence = self.parse_expr(i);
+                assert_eq!(next_token(i), Some(")"));
+                let body = self.parse_statement(i, _locals);
+                dbg!(var_name, sequence, body);
+                todo!("for loops");
+            }
             "var" => {
                 let name = peek_next_token(i).unwrap();
                 self.globals.declare(name);
@@ -564,7 +593,8 @@ impl<'text> Parser<'text> {
                                 Box::new(self.parse_expr(i)),
                             )
                         } else {
-                            unimplemented!("discarded local")
+                            i.rollback(x.len());
+                            Statement::ExprStatement(self.parse_expr(i))
                         }
                     }
                     Some(NameType::Global) => {
@@ -574,7 +604,8 @@ impl<'text> Parser<'text> {
                                 Box::new(self.parse_expr(i)),
                             )
                         } else {
-                            unimplemented!("discarded global")
+                            i.rollback(x.len());
+                            Statement::ExprStatement(self.parse_expr(i))
                         }
                     }
                     Some(NameType::ThisCall) => {
@@ -607,8 +638,7 @@ impl<'text> Parser<'text> {
     ) -> Statement<'text> {
         use crate::ast::IfBody;
         let cond = self.parse_expr(i);
-        assert_eq!(next_token(i), Some("{"));
-        let body = self.parse_block(i, _locals);
+        let body = self.parse_statement(i, _locals);
         let if_body = if let Some(Consumed::Expected) = consume_next_token_if(i, "else") {
             if let Consumed::Expected = consume_next_token_if(i, "if").unwrap() {
                 todo!("elseif chain")
@@ -642,9 +672,13 @@ impl<'text> Parser<'text> {
             assert_eq!(next_token(i), Some("}"));
             Statement::Block(v)
         } else {
-            let e = self.parse_expr(i);
+            let s = self.parse_statement(i, locals);
             assert_eq!(next_token(i), Some("}"));
-            Statement::Return(e)
+            if let Statement::ExprStatement(e) = s {
+                Statement::Return(e)
+            } else {
+                s
+            }
         }
     }
 

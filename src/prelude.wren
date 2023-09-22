@@ -2,6 +2,7 @@ class Object {
     static same(obj1, obj2) {
         return ;asm (obj1, obj2) {
             /* native ObjectSame */
+			0x22 0x01 0x00 0x00 0x00
         }
     }
 
@@ -53,9 +54,16 @@ class Num {
     *(other) {
         return ;asm(this, other) {
             /* native Multiply */
-			0x22 0x01 0x00 0x00 0x00
+			0x22 0x00 0x01 0x00 0x00
         }
     }
+
+	+(other) {
+		// FIXME: This is multiplying
+		return ;asm(this, other) {
+			0x22 0x00 0x01 0x00 0x00
+		}
+	}
 }
 
 class String {}
@@ -69,4 +77,11 @@ class List is Sequence {}
 class Map is Sequence {}
 class Fn {}
 class Fiber {}
-class System {}
+class System {
+	static print(s) {
+		;asm(s) {
+			/* native Print */
+			0x22 0x01 0x01 0x00 0x00	
+		}
+	}
+}

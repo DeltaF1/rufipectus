@@ -18,7 +18,5 @@ class Square is Rectangle {
   foo { height }
 }
 
-var s
-s = Rectangle.new(3, 5)
-s = Square.new(10)
-yield s.foo
+var s = Square.new(3.05)
+System.print(s.area())

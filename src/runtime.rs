@@ -124,6 +124,17 @@ pub enum PrimitiveValue {
     Null,
 }
 
+impl std::fmt::Display for Value {
+    fn fmt(&self, f: &mut Formatter<'_>) -> Result<(), std::fmt::Error> {
+        match self {
+            Value::Primitive(v) => {
+                write!(f, "{}", v)
+            }
+            _ => todo!(),
+        }
+    }
+}
+
 impl std::fmt::Debug for PrimitiveValue {
     fn fmt(&self, f: &mut Formatter<'_>) -> Result<(), std::fmt::Error> {
         write!(f, "{}", self)

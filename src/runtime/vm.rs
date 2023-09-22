@@ -16,7 +16,10 @@ pub fn run(
         let mut iter = (binary.bytes[(ctx.ip as usize)..]).iter().copied();
 
         //dbg!(&ctx);
-        let op = Op::deserialize(&mut iter).unwrap();
+        let op = match Op::deserialize(&mut iter) {
+            Some(op) => op,
+            None => return ctx.stack.pop().or_else(|_| Ok(Value::null())),
+        };
         /*println!(
             "({})[{}] {:?}",
             symbols.map(|s| -> &str {&s.labels[ctx.ip as usize]}).unwrap_or("???"), ctx.ip, &op
@@ -92,10 +95,10 @@ pub fn run(
                     }
                     bytecode::Primitive::Boolean(b) => {
                         Value::Primitive(runtime::PrimitiveValue::Boolean(b))
-                    },
+                    }
                     bytecode::Primitive::String(n) => {
                         let string = &binary.strings[n as usize];
-                        Value::Primitive(runtime::PrimitiveValue::String(&**string as *const[u8]))
+                        Value::Primitive(runtime::PrimitiveValue::String(&**string as *const [u8]))
                     }
                 };
                 ctx.stack.push(value);
@@ -118,22 +121,31 @@ pub fn run(
                 let top = ctx.stack.top();
                 let class = top.get_class();
                 let mut lookup_ptr: usize = {
-                    let methods = class.borrow_fields()[runtime::ClassStructure::Methods as usize].clone();
+                    let methods =
+                        class.borrow_fields()[runtime::ClassStructure::Methods as usize].clone();
                     let float: f64 = methods.try_into().unwrap();
                     float.to_int().unwrap()
                 };
 
                 const ENTRY_SIZE: usize = 8;
                 let method_address = loop {
-                    let sig = u32::from_le_bytes((&binary.bytes[lookup_ptr..lookup_ptr+4]).try_into().unwrap());
-                    let code_location = u32::from_le_bytes((&binary.bytes[lookup_ptr+4..lookup_ptr+8]).try_into().unwrap());
+                    let sig = u32::from_le_bytes(
+                        (&binary.bytes[lookup_ptr..lookup_ptr + 4])
+                            .try_into()
+                            .unwrap(),
+                    );
+                    let code_location = u32::from_le_bytes(
+                        (&binary.bytes[lookup_ptr + 4..lookup_ptr + 8])
+                            .try_into()
+                            .unwrap(),
+                    );
                     if sig == 0xffffffff {
                         // End of the class's method dict
-                        break None
+                        break None;
                         // In future code_location could signal to skip backwards until the
                         // superclass is reached
                     } else if sig == signature {
-                        break Some(code_location)
+                        break Some(code_location);
                     }
 
                     // TOOD: In future iterate backwards for the inheritance structure
@@ -144,9 +156,10 @@ pub fn run(
                     Some(a) => a,
                     None => {
                         let slice = &binary.strings[signature as usize];
-                        let sig_name = std::str::from_utf8(slice).unwrap_or_else(|_|"broken utf8");
+                        let sig_name = std::str::from_utf8(slice).unwrap_or_else(|_| "broken utf8");
 
-                        let class_name = &class.borrow_fields()[runtime::ClassStructure::Name as usize];
+                        let class_name =
+                            &class.borrow_fields()[runtime::ClassStructure::Name as usize];
 
                         panic!("No method {} found for class {:?}", sig_name, class_name)
                     }
@@ -170,11 +183,21 @@ pub fn run(
                         let obj = runtime::ObjectRef::new(class, exact_repeat::exact_repeat(num_fields.to_int()?, Value::null()));
                         ctx.stack.push(obj.into());
                     },
+                    NativeCall::Same => {
+                        let a = ctx.stack.pop()?;
+                        let b = ctx.stack.pop()?;
+                        ctx.stack.push((a == b).into());
+                    },
                     NativeCall::Multiply => {
                         let b: f64 = ctx.stack.pop()?.try_into()?;
                         let a: f64 = ctx.stack.pop()?.try_into()?;
                         let c = a * b;
                         ctx.stack.push(c.into());
+                    },
+                    NativeCall::Print => {
+                        let s = ctx.stack.pop()?;
+                        // TODO: Call toString
+                        println!("{}", s);
                     },
                     NativeCall::Unimplemented => panic!("Tried to execute an unimplemented built-in method. This binary may be out-of-date with the bytecode"),
                     NativeCall::UserDefined(_tag) => todo!("User-pluggable native functions")
