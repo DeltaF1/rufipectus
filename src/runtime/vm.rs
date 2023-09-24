@@ -116,7 +116,14 @@ pub fn run(
                     ctx.ip = ctx.ip.wrapping_add_signed(offset)
                 }
             }
-            Op::CallDirect(arity, address) => ctx.call(arity, address),
+            Op::CallDirect(arity, address) => {
+                let mut cloned = iter.clone();
+                let next_op = Op::deserialize(&mut cloned);
+                match next_op {
+                    Some(Op::Ret) => ctx.tail_call(arity, address),
+                    _ => ctx.call(arity, address)
+                }
+            },
             Op::CallNamed(arity, signature) => {
                 let top = ctx.stack.top();
                 let class = top.get_class();
@@ -165,7 +172,13 @@ pub fn run(
                     }
                 };
 
-                ctx.call(arity, method_address);
+                let mut cloned = iter.clone();
+                let next_op = Op::deserialize(&mut cloned);
+                match next_op {
+                    Some(Op::Ret) => ctx.tail_call(arity, method_address),
+                    _ => ctx.call(arity, method_address)
+                }
+
             }
             Op::Ret => ctx.ret(),
             Op::RetNull => {

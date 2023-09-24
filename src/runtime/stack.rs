@@ -152,13 +152,10 @@ impl ExecutionContext {
         {
             let vec = &mut stack.vec;
 
-            // Copy the n args from the top of the stack into the base of the stack frame
+            // Delete anything below the n args from the top of the stack
             let arg_start = vec.len() - n;
-            let (destination, args) = vec.split_at_mut(arg_start);
-            destination[stack.frame_start..].swap_with_slice(args);
+            vec.drain(stack.frame_start..arg_start);
 
-            // Delete the rest of the stack frame in preparation for the call
-            vec.truncate(stack.frame_start + n)
         }
 
         // Tailcall, don't preserve the previous IP
