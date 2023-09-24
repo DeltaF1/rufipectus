@@ -72,6 +72,8 @@ pub enum Statement<'a> {
     Block(Vec<Statement<'a>>),
     Return(Expression<'a>),
     Yield(Expression<'a>),
+    Break,
+    Continue,
     ExprStatement(Expression<'a>),
     While(Expression<'a>, Box<Statement<'a>>),
     For(&'a str, Expression<'a>, Box<Statement<'a>>),

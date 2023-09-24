@@ -1286,6 +1286,9 @@ impl<'a, 'text> Augur<'a, 'text> {
             Statement::Yield(e) => {
                 self.typecheck_expr(e);
             }
+            Statement::Break | Statement::Continue => {
+                todo!("Bottom type stuff?");
+            }
             Statement::While(cond, body) => {
                 self.typecheck_expr(cond);
                 self.typecheck_statement(body);
@@ -1552,6 +1555,9 @@ impl<'a, 'text> PallBearer {
             Statement::Yield(e) => {
                 self.lower_expression(augur, asm, e);
                 asm.emit_op(bytecode::Op::Yield);
+            }
+            Statement::Break | Statement::Continue => {
+                todo!("Track most recent enclosing loop");
             }
             Statement::While(cond, body) => {
                 /*asm.with_section("while", |asm| {
