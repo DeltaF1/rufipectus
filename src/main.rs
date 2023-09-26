@@ -1868,16 +1868,41 @@ fn main() {
     // Perform surgery on this AST to remove the initialization code for Object and Class.
     // These will be sitting in their slots at the start of runtime already thanks to
     // runtime::warmup()
-    prelude_ast.remove(0);
-    prelude_ast.remove(0);
-
+    //prelude_ast.remove(0);
+    //prelude_ast.remove(0);
     let mut main_ast = parser.feed_text(&s);
     let mut top_level_ast = prelude_ast;
     top_level_ast.append(&mut main_ast);
 
-    let parsed = Module::from_parser(parser, Statement::Block(top_level_ast));
-    let mut augur = Augur::from_module(&parsed);
+    let mut parsed = Module::from_parser(parser, Statement::Block(top_level_ast));
 
+
+    {
+        let object_meta = unsafe { parsed.classes[0].get_meta_class() }.unwrap();
+        let class = &parsed.classes[2];
+        let class_meta = unsafe { class.get_meta_class() }.unwrap();
+        assert_eq!(Rc::strong_count(&object_meta), 2);
+        assert!(unsafe { object_meta.get_parent() }.is_none());
+        assert_eq!(Rc::strong_count(&class_meta), 2);
+    }
+
+    {
+        // SAFETY: Not going to modify object_meta (other than its parent field which is behind
+        // another UnsafeCell)
+        let object_meta: &Rc<ClassDef> = unsafe { parsed.classes[0].get_meta_class() }.unwrap();
+        let class: &Rc<ClassDef> = &parsed.classes[2];
+
+        // SAFETY: No other references to class_meta exist at the moment
+        let class_meta: &mut Option<Rc<ClassDef>> = unsafe { &mut *class.metaclass.get() };
+        *class_meta = Some(Rc::clone(&class));
+
+        // SAFETY: No other references to object metaclass's parent exist at the moment, and in
+        // fact none should ever exist at this point because we've asserted that it's None
+        let object_meta_parent: &mut Option<Rc<ClassDef>> =
+            unsafe { &mut *object_meta.parent.get() };
+        *object_meta_parent = Some(Rc::clone(&class));
+    }
+    let mut augur = Augur::from_module(&parsed);
     augur.aug(&parsed.top_level_ast);
 
     let mut pall = PallBearer::new();
