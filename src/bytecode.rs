@@ -916,6 +916,10 @@ impl<'text> Assembler<'text> {
             .cloned()
             .ok_or(())
     }
+
+    pub fn resolve(&self, l: Lookup<'text>) -> Vec<Cow<'text, str>> {
+        l.resolve(&self.current_path)
+    }
 }
 
 #[derive(Default, Debug)]

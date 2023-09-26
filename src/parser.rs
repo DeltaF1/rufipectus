@@ -542,7 +542,7 @@ impl<'text> Parser<'text> {
                 let cond = self.parse_expr(i);
                 assert_eq!(next_token(i), Some(")"));
                 let block = self.parse_statement(i, _locals);
-                todo!("While loops");
+                Statement::While(cond, Box::new(block))
             }
             "for" => {
                 assert_eq!(next_token(i), Some("("));
@@ -555,6 +555,8 @@ impl<'text> Parser<'text> {
                 dbg!(var_name, sequence, body);
                 todo!("for loops");
             }
+            "break" => Statement::Break,
+            "continue" => Statement::Continue,
             "var" => {
                 let name = peek_next_token(i).unwrap();
                 self.globals.declare(name);

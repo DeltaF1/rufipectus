@@ -1345,6 +1345,8 @@ impl<'a, 'text> Augur<'a, 'text> {
 #[derive(Default)]
 struct PallBearer {
     strings: Vec<String>,
+    current_loop_break: Option<Vec<String>>,
+    current_loop_continue: Option<Vec<String>>,
 }
 
 impl<'a, 'text> PallBearer {
@@ -1557,23 +1559,51 @@ impl<'a, 'text> PallBearer {
                 self.lower_expression(augur, asm, e);
                 asm.emit_op(bytecode::Op::Yield);
             }
-            Statement::Break | Statement::Continue => {
-                todo!("Track most recent enclosing loop");
+            Statement::Break => {
+                let path = self
+                    .current_loop_break
+                    .as_ref()
+                    .expect("Break outside of loop!");
+                let cow_path = path.iter().map(|s| Cow::Owned(s.clone())).collect();
+                asm.emit_jump(Lookup::Absolute(cow_path).into());
+            }
+            Statement::Continue => {
+                let path = self
+                    .current_loop_continue
+                    .as_ref()
+                    .expect("Break outside of loop!");
+                let cow_path = path.iter().map(|s| Cow::Owned(s.clone())).collect();
+                asm.emit_jump(Lookup::Absolute(cow_path).into());
             }
             Statement::While(cond, body) => {
-                /*asm.with_section("while", |asm| {
-                    asm.label("cond");
+                let rand: u32 = rand::random();
+                asm.with_section(format!("while{}", rand), |asm| {
+                    let cond_path = asm
+                        .resolve("cond".into())
+                        .into_iter()
+                        .map(Cow::into_owned)
+                        .collect();
+                    let break_path = asm
+                        .resolve("break".into())
+                        .into_iter()
+                        .map(Cow::into_owned)
+                        .collect();
+
+                    let old_continue = self.current_loop_continue.replace(cond_path);
+                    let old_break = self.current_loop_break.replace(break_path);
+                    asm.label("cond".into());
                     self.lower_expression(augur, asm, cond);
-                    asm.emit_jump_if("then");
-                    asm.emit_jump("break");
+                    asm.emit_jump_if("then".into());
+                    asm.emit_jump("break".into());
 
-                    asm.label("then");
+                    asm.label("then".into());
                     self.lower_statement(augur, asm, body);
-                    asm.emit_jump("cond");
+                    asm.emit_jump("cond".into());
 
-                    asm.label("break");
-                });*/
-                todo!("lower while loops")
+                    asm.label("break".into());
+                    self.current_loop_continue = old_continue;
+                    self.current_loop_break = old_break;
+                });
             }
             Statement::For(var_name, sequence, body) => todo!("lower for loops"),
             Statement::ExprStatement(e) => {
