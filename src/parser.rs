@@ -506,7 +506,11 @@ impl<'text> Parser<'text> {
                             .unwrap();
                     class_builder = ClassDef::child_of(super_class, name);
                 } else {
-                    class_builder = ClassBuilder::new(name);
+                    let super_class = self.global_classes.get("Object");
+                    class_builder = match super_class {
+                        Some(object_class) => ClassDef::child_of(object_class, name),
+                        None => ClassBuilder::new(name),
+                    }
                 }
 
                 //locals.declare(name);
@@ -836,7 +840,13 @@ impl<'text> Parser<'text> {
         }
         assert_eq!(next_token(i), Some("}"));
 
-        ref_self.into_inner().current_class.take().unwrap().finish()
+        let class_class = ref_self.borrow().global_classes.get("Class").map(Rc::clone);
+        ref_self
+            .into_inner()
+            .current_class
+            .take()
+            .unwrap()
+            .finish(class_class)
     }
 
     fn parse_method_body(&mut self, i: &mut StringStream<'text>) -> MethodAst<'text> {

@@ -652,7 +652,7 @@ impl<'a> ClassBuilder<'a> {
         self.add_method(sig, body)
     }
 
-    pub fn finish(self) -> Rc<ClassDef<'a>> {
+    pub fn finish(self, class_class: Option<Rc<ClassDef<'a>>>) -> Rc<ClassDef<'a>> {
         let mut class = self.class;
         let mut meta_class = self.meta_class;
         class.fields = self
@@ -665,6 +665,7 @@ impl<'a> ClassBuilder<'a> {
         meta_class.fields = self.static_fields.validate().unwrap();
 
         class.metaclass = Some(Rc::new(meta_class));
+        meta_class.parent = class_class.into();
         let class = Rc::new(class);
         let weak = Rc::downgrade(&class);
 
