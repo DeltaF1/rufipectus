@@ -1400,13 +1400,14 @@ impl<'a, 'text> PallBearer {
                 self.lower_class(class, augur, asm)
             }
         });
+
         asm.with_section("_start", |asm| {
             self.lower_statement(augur, asm, &module.top_level_ast)
         });
 
         // TODO: emit a "Fault" opcode here to prevent falling off the end of the top level code
         // TODO: If any Dynamic calls were emitted, write down any matching sigs
-
+        asm.emit_op(bytecode::Op::Exit);
         let (mut binary, debug) = asm.assemble().unwrap();
         binary.strings = self
             .strings

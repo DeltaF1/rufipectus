@@ -176,14 +176,14 @@ pub fn run(
                 let next_op = Op::deserialize(&mut cloned);
                 match next_op {
                     Some(Op::Ret) => ctx.tail_call(arity, method_address),
-                    _ => ctx.call(arity, method_address)
+                    _ => ctx.call(arity, method_address),
                 }
-
             }
             Op::Ret => ctx.ret(),
-            Op::RetNull => {
-                ctx.stack.push(Value::null());
-                ctx.ret();
+            Op::ClassOf => {
+                let top = ctx.stack.pop()?;
+                let class = top.get_class().into();
+                ctx.stack.push(class);
             }
             Op::Yield => return Ok(ctx.stack.pop()?),
             Op::YieldNull => return Ok(Value::null()),
@@ -216,6 +216,7 @@ pub fn run(
                     NativeCall::UserDefined(_tag) => todo!("User-pluggable native functions")
                 }
             }
+            Op::Exit => return Ok(Value::null()),
         }
     }
 }

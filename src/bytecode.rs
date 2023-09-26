@@ -119,15 +119,14 @@ pub enum Op {
     CallDirect(usize, CodeAddress),
     CallNamed(usize, StringAddress),
     Ret,
-    // TODO: Reuse this for ClassOf or something
-    #[deprecated]
-    RetNull,
+    ClassOf,
     Yield,
     #[deprecated]
     YieldNull,
     NativeCall(NativeCall),
     // TODO: new opcode for calling user-defined code
     // Foreign(u32)
+    Exit,
 }
 
 const fn opcode(op: &Op) -> u8 {
@@ -156,10 +155,11 @@ const fn opcode(op: &Op) -> u8 {
         CallDirect(_, _) => 0x1c,
         CallNamed(_, _) => 0x1d,
         Ret => 0x1e,
-        RetNull => 0x1f,
+        ClassOf => 0x1f,
         Yield => 0x20,
         YieldNull => 0x21, // Are these necessary?
         NativeCall(_) => 0x22,
+        Exit => 0x24,
     }
 }
 
@@ -207,7 +207,7 @@ impl Op {
                 output.extend_from_slice(&(u32::try_from(*n).unwrap()).to_le_bytes())
             }
             NativeCall(native) => output.extend_from_slice(&native.discriminant().to_le_bytes()),
-            Yield | Pop | Ret | PopThis | PushThis | Dup => {}
+            Yield | Pop | Ret | ClassOf | PopThis | PushThis | Dup | Exit => {}
             x => todo!("Serialize {x:?}"),
         }
         assert_eq!(output.len(), len + self.len());
@@ -265,7 +265,7 @@ impl Op {
             0x1c => Op::CallDirect(read_u32!(i) as usize, read_u32!(i) as CodeAddress),
             0x1d => Op::CallNamed(read_u32!(i) as usize, read_u32!(i) as StringAddress),
             0x1e => Op::Ret,
-            0x1f => Op::RetNull,
+            0x1f => Op::ClassOf,
             0x20 => Op::Yield,
             0x21 => Op::YieldNull,
             0x22 => {
@@ -277,6 +277,7 @@ impl Op {
                 };
                 Op::NativeCall(native)
             }
+            0x24 => Op::Exit,
             _ => panic!("No opcode for byte {opcode}"),
         })
     }
