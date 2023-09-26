@@ -46,13 +46,13 @@ where
         self.get_or_insert(item)
     }
 
-    pub fn validate(self) -> Option<Vec<T>> {
-        for item in &self.items {
+    pub fn validate(mut self) -> Result<Vec<T>, T> {
+        for (i, item) in self.items.iter().enumerate() {
             if !self.written_items.contains(item) {
-                return None;
+                return Err(self.items.remove(i));
             }
         }
-        Some(self.items)
+        Ok(self.items)
     }
 }
 
@@ -1113,10 +1113,7 @@ impl<'a, 'text> Augur<'a, 'text> {
                 if let Some(target) = ClassDef::find_class_with_method(&class, &sig) {
                     CallTarget::Static(target, sig)
                 } else {
-                    panic!(
-                        "Statically determined it's impossible to call {sig} for class {0}",
-                        class.name
-                    )
+                    panic!("{0} does not implement '{sig}'", class.name)
                 }
             }
             Type::Bottom => {
@@ -1743,7 +1740,10 @@ impl<'a, 'text> PallBearer {
                 for e in args {
                     self.lower_expression(augur, asm, e);
                 }
-                asm.insert_tree(Lookup::Relative(vec![]), section.clone())
+                let rand: u32 = rand::random();
+                asm.with_section(format!("inline{}", rand), |asm| {
+                    asm.insert_tree(Lookup::Relative(vec![]), section.clone());
+                });
             }
             Expression::ClassBody(class, super_class_slot) => {
                 /*

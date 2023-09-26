@@ -22,7 +22,11 @@ pub fn run(
         };
         /*println!(
             "({})[{}] {:?}",
-            symbols.map(|s| -> &str {&s.labels[ctx.ip as usize]}).unwrap_or("???"), ctx.ip, &op
+            symbols
+                .map(|s| -> &str { &s.labels[ctx.ip as usize] })
+                .unwrap_or("???"),
+            ctx.ip,
+            &op
         );*/
         ctx.ip += TryInto::<CodeAddress>::try_into(op.len()).unwrap();
         match op {
@@ -58,8 +62,8 @@ pub fn run(
                     .expect("Tried to write field {n} outside of a method")
                 {
                     Value::Object(ref object_ref) => {
-                        let mut fields = object_ref.borrow_fields_mut();
                         let value = ctx.stack.pop()?;
+                        let mut fields = object_ref.borrow_fields_mut();
                         fields[n] = value;
                     }
                     x => panic!("Tried to write field {n} of non-object {x:?}"),
@@ -121,9 +125,9 @@ pub fn run(
                 let next_op = Op::deserialize(&mut cloned);
                 match next_op {
                     Some(Op::Ret) => ctx.tail_call(arity, address),
-                    _ => ctx.call(arity, address)
+                    _ => ctx.call(arity, address),
                 }
-            },
+            }
             Op::CallNamed(arity, signature) => {
                 let top = ctx.stack.top();
                 let class = top.get_class();
