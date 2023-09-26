@@ -116,6 +116,21 @@ pub enum IfBody<'a> {
     },
 }
 
+pub fn missing_return(s: &Statement) -> bool {
+    match s {
+        Statement::Return(_) => false,
+        Statement::Block(v) => {
+            if v.len() == 0 {
+                true
+            } else {
+                missing_return(&v[v.len() - 1])
+            }
+        }
+        _ => true,
+    }
+}
+
+
 #[derive(Debug, PartialEq)]
 pub enum AstSig<'a> {
     Getter(Cow<'a, str>),

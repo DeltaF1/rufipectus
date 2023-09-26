@@ -328,21 +328,6 @@ struct MethodAst<'a> {
     ast: Statement<'a>,
 }
 
-// TODO: move to ast
-fn missing_return(s: &Statement) -> bool {
-    match s {
-        Statement::Return(_) => false,
-        Statement::Block(v) => {
-            if v.len() == 0 {
-                true
-            } else {
-                missing_return(&v[v.len() - 1])
-            }
-        }
-        _ => true,
-    }
-}
-
 #[derive(Default)]
 struct ClassDef<'text> {
     name: Cow<'text, str>,
@@ -629,7 +614,7 @@ impl<'a> ClassBuilder<'a> {
 
         self.meta_class.constructors.insert(sig);
 
-        if missing_return(&body.ast) {
+        if ast::missing_return(&body.ast) {
             match &mut body.ast {
                 Statement::Block(v) => v.push(Statement::Return(Expression::This)),
                 _ => {
@@ -1484,7 +1469,7 @@ impl<'a, 'text> PallBearer {
             // TODO: Check with augur to determine the ABI of this method
             asm.emit_op(bytecode::Op::PopThis);
             self.lower_statement(augur, asm, &ast.ast);
-            if missing_return(&ast.ast) {
+            if ast::missing_return(&ast.ast) {
                 asm.emit_op(bytecode::Op::PushPrimitive(bytecode::Primitive::Null));
                 asm.emit_op(bytecode::Op::Ret);
             }
