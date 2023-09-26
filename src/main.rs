@@ -1876,6 +1876,100 @@ fn main() {
 
     let mut parsed = Module::from_parser(parser, Statement::Block(top_level_ast));
 
+    if let Statement::Block(ref mut v) = &mut parsed.top_level_ast {
+        use bytecode::{Op, Primitive};
+        use runtime::ClassStructure;
+        v[0] = {
+            let mut asm = Assembler::new();
+            asm.with_section("class object creation Object", |asm| {
+                let object = &parsed.classes[0];
+                let object_fields: i32 = object.num_fields().try_into().unwrap();
+                let object_meta = unsafe { object.get_meta_class() }.unwrap();
+                let static_fields: i32 = object_meta.num_fields().try_into().unwrap();
+                let meta_name = "Object metaclass";
+                asm.emit_call(0, "body".into());
+
+                asm.emit_jump("end".into());
+                asm.label("body".into());
+                // num_fields
+                asm.emit_literal(object_fields);
+                // Object has no superclass
+                asm.emit_op(Op::PushPrimitive(Primitive::Null));
+                // methods
+                asm.emit_deferred_address(
+                    Lookup::Absolute(vec!["method dicts".into(), "Object".into()]).into(),
+                );
+                // static num_fields
+                asm.emit_literal(static_fields);
+                // Class (metaclass's superclass)
+                asm.emit_op(Op::PushGlobal(GlobalClassSlots::Class as usize));
+                // metaclass's methods
+                asm.emit_deferred_address(
+                    Lookup::Absolute(vec!["method dicts".into(), meta_name.into()]).into(),
+                );
+                // Get Object metaclass
+                asm.emit_op(Op::PushGlobal(GlobalClassSlots::Object as usize));
+                asm.emit_op(Op::ClassOf);
+                // pop into this
+                asm.emit_op(Op::PopThis);
+                // write_field ClassStructure::Supertype
+                asm.emit_op(Op::WriteField(ClassStructure::Methods as usize));
+                asm.emit_op(Op::WriteField(ClassStructure::Supertype as usize));
+                // - write_field ClassStructure::num_fields
+                asm.emit_op(Op::WriteField(ClassStructure::NumFields as usize));
+
+                asm.emit_op(Op::PushGlobal(GlobalClassSlots::Object as usize));
+                // - pop into this
+                asm.emit_op(Op::PopThis);
+                // - write_field ClassStructure::Supertype
+                asm.emit_op(Op::WriteField(ClassStructure::Methods as usize));
+                asm.emit_op(Op::WriteField(ClassStructure::Supertype as usize));
+                // - write_field ClassStructure::num_fields
+                asm.emit_op(Op::WriteField(ClassStructure::NumFields as usize));
+                // - push this
+                asm.emit_op(Op::PushThis);
+                // - ret
+                asm.emit_op(Op::Ret);
+                asm.label("end".into());
+            });
+            Statement::ExprStatement(Expression::InlineAsm(vec![], asm.into_tree()))
+        };
+
+        v[1] = {
+            let mut asm = Assembler::new();
+            asm.with_section("class object creation Class", |asm| {
+                let class = &parsed.classes[2];
+                let object_fields: i32 = class.num_fields().try_into().unwrap();
+                asm.emit_call(0, "body".into());
+
+                asm.emit_jump("end".into());
+                asm.label("body".into());
+                // num_fields
+                asm.emit_literal(object_fields);
+                // Class's superclass is Object
+                asm.emit_op(Op::PushGlobal(GlobalClassSlots::Object as usize));
+                // methods
+                asm.emit_deferred_address(
+                    Lookup::Absolute(vec!["method dicts".into(), "Class".into()]).into(),
+                );
+
+                asm.emit_op(Op::PushGlobal(GlobalClassSlots::Class as usize));
+                // - pop into this
+                asm.emit_op(Op::PopThis);
+                // - write_field ClassStructure::Supertype
+                asm.emit_op(Op::WriteField(ClassStructure::Methods as usize));
+                asm.emit_op(Op::WriteField(ClassStructure::Supertype as usize));
+                // - write_field ClassStructure::num_fields
+                asm.emit_op(Op::WriteField(ClassStructure::NumFields as usize));
+                // - push this
+                asm.emit_op(Op::PushThis);
+                // - ret
+                asm.emit_op(Op::Ret);
+                asm.label("end".into());
+            });
+            Statement::ExprStatement(Expression::InlineAsm(vec![], asm.into_tree()))
+        };
+    }
 
     {
         let object_meta = unsafe { parsed.classes[0].get_meta_class() }.unwrap();
