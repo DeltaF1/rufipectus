@@ -1,6 +1,6 @@
 #![deny(unsafe_op_in_unsafe_fn)]
 use std::borrow::Cow;
-use std::cell::Cell;
+use std::cell::{Cell, UnsafeCell};
 use std::collections::{HashMap, HashSet};
 
 use std::fs::File;
@@ -346,8 +346,8 @@ fn missing_return(s: &Statement) -> bool {
 #[derive(Default)]
 struct ClassDef<'text> {
     name: Cow<'text, str>,
-    parent: Option<Rc<ClassDef<'text>>>,
-    metaclass: Option<Rc<ClassDef<'text>>>,
+    parent: UnsafeCell<Option<Rc<ClassDef<'text>>>>,
+    metaclass: UnsafeCell<Option<Rc<ClassDef<'text>>>>,
     fields: Vec<&'text str>,
     methods: HashMap<Signature<'text>, MethodAst<'text>>,
 
@@ -360,7 +360,9 @@ impl std::fmt::Debug for ClassDef<'_> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> Result<(), std::fmt::Error> {
         f.debug_struct("ClassDef")
             .field("name", &self.name)
-            .field("parent", &self.parent.as_ref().map(|p| &p.name))
+            // SAFETY: parents are never modified
+            // Furthermore no references escape this method
+            .field("parent", &unsafe { self.get_parent() }.map(|p| &p.name))
             .field("fields", &self.fields)
             .field("metaclass", &self.metaclass)
             .field("methods", &self.methods)
@@ -397,7 +399,9 @@ impl<'a> ClassDef<'a> {
     pub fn is_subclass_of(&self, other: &ClassDef<'a>) -> bool {
         let mut current = self;
 
-        while let Some(ancestor) = &current.parent {
+        // SAFETY: parents are never modified
+        // Furthermore no references escape this method
+        while let Some(ancestor) = unsafe { current.get_parent() } {
             if std::ptr::eq(&**ancestor, other) {
                 return true;
             }
@@ -412,7 +416,7 @@ impl<'a> ClassDef<'a> {
         let mut builder = ClassBuilder {
             class: ClassDef {
                 name: name.into(),
-                parent: Some(parent.clone()),
+                parent: Some(parent.clone()).into(),
                 ..Default::default()
             },
             meta_class: ClassDef::new((name.to_owned() + " metaclass").into()),
@@ -428,8 +432,19 @@ impl<'a> ClassDef<'a> {
         builder
     }
 
+    unsafe fn get_parent(&self) -> Option<&Rc<ClassDef<'a>>> {
+        unsafe { &*self.parent.get() }.into()
+    }
+
+    unsafe fn get_meta_class(&self) -> Option<&Rc<ClassDef<'a>>> {
+        // SAFETY: Caller must provide reference mutability guarantees
+        unsafe { &*self.metaclass.get() }.into()
+    }
+
     fn num_parent_fields(&self) -> usize {
-        self.parent.as_deref().map_or(0, ClassDef::num_fields)
+        // SAFETY: parents are never modified
+        // Furthermore no references escape this method
+        unsafe { self.get_parent() }.map_or(0, |r| ClassDef::num_fields(&**r))
     }
 
     fn num_fields(&self) -> usize {
@@ -449,21 +464,26 @@ impl<'a> ClassDef<'a> {
             if let Some(method) = cls.methods.get(sig) {
                 return Some(method);
             }
-            next = cls.parent.as_deref();
+            // SAFETY: parents are never modified
+            // Furthermore no references escape this method
+            next = unsafe { cls.get_parent() }.map(|r| &**r);
         }
         None
     }
 
     pub fn find_super_method(&self, sig: &Signature<'a>) -> Option<&MethodAst<'a>> {
-        self.parent.as_ref()?.find_method(sig)
+        // SAFETY: parents are never modified
+        // Furthermore no references escape this method
+        unsafe { self.get_parent() }?.find_method(sig)
     }
 
     fn find_class_with_method(self: &Rc<Self>, sig: &Signature<'a>) -> Option<Rc<ClassDef<'a>>> {
         if self.methods.contains_key(sig) {
             Some(self.clone())
         } else {
-            self.parent
-                .as_ref()
+            // SAFETY: parents are never modified
+            // Furthermore no references escape this method
+            unsafe { self.get_parent() }
                 .and_then(|parent| ClassDef::find_class_with_method(parent, sig))
         }
     }
@@ -472,15 +492,21 @@ impl<'a> ClassDef<'a> {
         self: &Rc<Self>,
         sig: &Signature<'a>,
     ) -> Option<Rc<ClassDef<'a>>> {
-        self.parent.as_ref()?.find_class_with_method(sig)
+        // SAFETY: parents are never modified
+        // Furthermore no references escape this method
+        unsafe { self.get_parent() }?.find_class_with_method(sig)
     }
 
     /// Only used for debugging
     fn find_field_in_parents(&self, name: &str) -> Option<(Rc<ClassDef<'a>>, usize)> {
-        let mut to_search = &self.parent;
+        // SAFETY: parents are never modified
+        // Furthermore no references escape this method
+        let mut to_search = unsafe { self.get_parent() };
 
         while let Some(class) = to_search {
-            to_search = &class.parent;
+            // SAFETY: parents are never modified
+            // Furthermore no references escape this method
+            to_search = unsafe { class.get_parent() };
             if let Some(i) = class.get_field_index(name) {
                 return Some((Rc::clone(&class), i));
             }
@@ -667,15 +693,14 @@ impl<'a> ClassBuilder<'a> {
         // panic!("Field {field} in class {} is never written to!", self.class.name)
 
         meta_class.fields = self.static_fields.validate().unwrap();
-
-        class.metaclass = Some(Rc::new(meta_class));
         meta_class.parent = class_class.into();
+        class.metaclass = Some(Rc::new(meta_class)).into();
         let class = Rc::new(class);
         let weak = Rc::downgrade(&class);
 
-        class
-            .metaclass
-            .as_ref()
+        // SAFETY: This is an owning reference to class so nothing else will be modifying it
+        // Furthermore no references escape this method
+        unsafe { class.get_meta_class() }
             .unwrap()
             .constructor_type
             .set(Some(weak));
@@ -777,7 +802,9 @@ fn generate_latest_implementations<'text>(
     fn ancestors<'c, 'text>(class: &'c ClassDef<'text>) -> Vec<&'c Rc<ClassDef<'text>>> {
         let mut vec = vec![];
         let mut current = class;
-        while let Some(parent) = &current.parent {
+        // SAFETY: parents are never modified
+        // Furthermore these references never escape generate_latest_implementations
+        while let Some(parent) = unsafe { current.get_parent() } {
             vec.push(parent);
             current = &parent;
         }
@@ -1245,7 +1272,8 @@ impl<'a, 'text> Augur<'a, 'text> {
                     .expect("Tried to typecheck 'this' outside of method"),
             )),
             Expression::ClassBody(class, _) => {
-                Type::KnownClass(Rc::clone(class.0.metaclass.as_ref().unwrap()))
+                // SAFETY: This reference is immediately cloned
+                Type::KnownClass(Rc::clone(unsafe { class.0.get_meta_class() }.unwrap()))
             }
             Expression::Construct => {
                 Type::KnownClass(self.current_class().get_constructor_type().unwrap())
@@ -1292,7 +1320,7 @@ impl<'a, 'text> Augur<'a, 'text> {
                 self.typecheck_expr(e);
             }
             Statement::Break | Statement::Continue => {
-                todo!("Bottom type stuff?");
+                //todo!("Bottom type stuff?");
             }
             Statement::While(cond, body) => {
                 self.typecheck_expr(cond);
@@ -1396,7 +1424,8 @@ impl<'a, 'text> PallBearer {
                         ]);
                         asm.emit_method_dict_entry(self.intern_string(&sig), addr.into());
                     }
-                    next = current.parent.as_ref();
+                    // SAFETY: parents are never modified
+                    next = unsafe { current.get_parent() };
                 }
                 asm.emit_method_dict_entry(u32::MAX, 0u32.into());
             }
@@ -1736,14 +1765,12 @@ impl<'a, 'text> PallBearer {
                 use runtime::ClassStructure;
 
                 let object_fields: i32 = class.0.num_fields().try_into().unwrap();
-                let metaclass = class.0.metaclass.as_ref().unwrap();
-                let static_fields: i32 = metaclass.fields.len().try_into().unwrap();
+                // SAFETY: metaclass is never written to
+                let metaclass = unsafe { class.0.get_meta_class() }.unwrap();
+                let static_fields: i32 = metaclass.num_fields().try_into().unwrap();
                 let class_name = &class.0.name;
                 let meta_name = &metaclass.name;
 
-                //println!("Generating object for class {class_name}");
-                //dbg!(object_fields);
-                //dbg!(static_fields);
                 assert!(static_fields >= 4);
                 asm.with_section(format!("class object creation {}", class_name), |asm| {
                     asm.emit_call(0, "body".into());
@@ -1834,12 +1861,6 @@ fn main() {
         s
     };
     let prelude = include_str!("prelude.wren");
-    /*{
-        let mut file = File::open("prelude.wren").unwrap();
-        let mut s = String::new();
-        file.read_to_string(&mut s).unwrap();
-        s
-    };*/
 
     let mut parser = parser::Parser::new();
     let mut prelude_ast = parser.feed_text(&prelude);

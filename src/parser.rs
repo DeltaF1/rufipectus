@@ -523,7 +523,9 @@ impl<'text> Parser<'text> {
                 self.global_classes.insert(name, Rc::clone(&def));
                 self.classes.push(Rc::clone(&def));
                 self.classes
-                    .push(def.metaclass.as_ref().map(Rc::clone).unwrap());
+                    // SAFETY: Metaclass is never written to
+                    // Furthermore, this reference is immediately cloned
+                    .push(unsafe { def.get_meta_class() }.map(Rc::clone).unwrap());
                 Statement::AssignGlobal(
                     self.globals.get_index(name).unwrap(),
                     Box::new(Expression::ClassBody(ClassRef(def), super_slot)),
