@@ -289,19 +289,6 @@ pub struct Binary {
     pub start: CodeAddress,
     pub strings: Vec<Box<[u8]>>,
 }
-/*
-TODO: Add more to Binary
-pub struct Binary {
-    instructions: [u8],
-    strings: Vec<[u8]>,
-    methods: Map<Signature, CodeAddress>,
-
-    // Keep track of how many global objects there are
-    variables: usize
-
-    start: CodeAddress
-}
-*/
 
 // TODO: Allow opcodes to be the result of a compile-time calculation? Probably overkill
 #[non_exhaustive]
@@ -611,7 +598,6 @@ impl<'text> Assembler<'text> {
         }
     }
 
-    // FIXME: dirty is never called
     fn dirty(&mut self) {
         self.state = IntermediateState::Dirty
     }
@@ -812,7 +798,6 @@ impl<'text> Assembler<'text> {
         Ok(())
     }
 
-    // TODO: Create a DebugSymbols struct that lets you look up the closest label for a given ip
     pub fn assemble(&mut self) -> Result<(Binary, DebugSymbols<'text>), MissingLabels> {
         self.get_or_generate().unwrap();
         match &self.state {

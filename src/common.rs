@@ -1,7 +1,6 @@
 pub type CodeAddress = u32;
 pub type StringAddress = u32;
 
-// TODO: Put this in common for use by the compiler
 #[repr(usize)]
 pub enum GlobalClassSlots {
     /* The cyclical powerhouse */

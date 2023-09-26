@@ -297,8 +297,6 @@ mod test {
         todo!("None of the addresses or offsets in this are still valid since they're offsets in the op list, not the bytecode");
         let code: Vec<bytecode::Op> = vec![
             /* Class */
-            // TODO: Some of these methods should be un-reachable by user code. Putting a space in
-            // the name seems to be how Wren does it for init methods and metaclasses
             // TODO: Dynamic methods pointer should be set here as well
             /* new(num_fields,supertype) */
             /* [0] */

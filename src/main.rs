@@ -571,36 +571,6 @@ impl<'a> ClassBuilder<'a> {
             args.push(Expression::ArgLookup(n));
         }
 
-        /*
-        let asm = {
-            let mut assembler = Assembler::new();
-            assembler.emit_op(bytecode::Op::ReadField(
-                runtime::ClassStructure::NumFields as usize,
-            ));
-            assembler.emit_op(bytecode::Op::PushThis);
-            assembler.emit_op(bytecode::Op::NativeCall(bytecode::NativeCall::NewObject));
-
-            // Store the object to return later
-            assembler.emit_op(bytecode::Op::Dup);
-            assembler.emit_op(bytecode::Op::PopThis);
-
-            // FIXME: Typechecking can't see this call so the initializer doesn't get typechecked!
-            // Now our stack is arg0 arg1 ... argn new_object
-            assembler.emit_call(
-                init_sig.arity.arity() + 1,
-                Lookup::Absolute(vec![
-                    "classes".into(),
-                    self.class.name.clone(),
-                    init_sig.to_string().into(),
-                ])
-                .into(),
-            );
-            // TODO: Guarantee that all initializers return this so we can tail-call here instead
-            assembler.emit_op(bytecode::Op::PushThis);
-            assembler.into_tree()
-        };
-        let asm = Expression::InlineAsm(args, asm);
-        */
         self.meta_class.methods.insert(
             sig.clone(),
             MethodAst {
@@ -1731,21 +1701,6 @@ impl<'a, 'text> PallBearer {
                 });
             }
             Expression::ClassBody(class, super_class_slot) => {
-                /*
-                // TODO: Class constructor magic
-                construct new(num_fields, supertype) {
-                    /*;asm(4, this) {
-                        native NewObject
-                        pop_this
-                    }*/
-                    _numFields = num_fields
-                    _supertype = supertype
-                    _name = ""
-                    _methods = null
-                }
-                */
-                // TODO: Move this into Class once asm parsing is done
-                // No-op call just to restore `this`
                 use bytecode::Op;
                 use runtime::ClassStructure;
 
@@ -1758,6 +1713,7 @@ impl<'a, 'text> PallBearer {
 
                 assert!(static_fields >= 4);
                 asm.with_section(format!("class object creation {}", class_name), |asm| {
+                    // No-op call just to restore `this`
                     asm.emit_call(0, "body".into());
 
                     asm.emit_jump("end".into());
@@ -1821,7 +1777,6 @@ impl<'a, 'text> PallBearer {
                     asm.emit_op(Op::Ret);
                     asm.label("end".into());
                 });
-                // TODO: Pointer to method lookup
             }
             Expression::Construct => {
                 asm.emit_op(bytecode::Op::ReadField(
