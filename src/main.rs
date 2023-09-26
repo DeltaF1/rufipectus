@@ -419,10 +419,12 @@ impl<'a> ClassDef<'a> {
             ..Default::default()
         };
 
-        builder.write_static_field(";numFields");
-        builder.write_static_field(";supertype");
-        builder.write_static_field(";name");
-        builder.write_static_field(";methods");
+        if name == "Class" {
+            builder.write_field(";numFields");
+            builder.write_field(";supertype");
+            builder.write_field(";name");
+            builder.write_field(";methods");
+        }
         builder
     }
 
@@ -505,10 +507,12 @@ impl<'a> ClassBuilder<'a> {
         };
 
         // Every class has these 4 unaccessable fields. The ; ensures they won't be looked up by the parser
-        builder.write_static_field(";numFields");
-        builder.write_static_field(";supertype");
-        builder.write_static_field(";name");
-        builder.write_static_field(";methods");
+        if name == "Class" {
+            builder.write_field(";numFields");
+            builder.write_field(";supertype");
+            builder.write_field(";name");
+            builder.write_field(";methods");
+        }
         builder
     }
 
