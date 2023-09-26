@@ -4,6 +4,7 @@ use std::collections::HashMap;
 use std::io::Read;
 use std::iter::Peekable;
 use std::rc::Rc;
+use std::borrow::Cow;
 
 use crate::ast::Primitive;
 use crate::common::StringAddress;
@@ -25,7 +26,7 @@ pub struct Module<'text> {
     pub(crate) global_classes: HashMap<&'text str, Rc<ClassDef<'text>>>,
     pub(crate) classes: Vec<Rc<ClassDef<'text>>>,
     pub(crate) globals: Scope<'text>,
-    pub(crate) strings: Vec<&'text str>,
+    pub(crate) strings: Vec<Cow<'text, str>>,
 }
 
 impl<'text> Module<'text> {
@@ -110,7 +111,7 @@ pub struct Parser<'text> {
     global_classes: HashMap<&'text str, Rc<ClassDef<'text>>>,
     classes: Vec<Rc<ClassDef<'text>>>,
     globals: Scope<'text>,
-    strings: Vec<&'text str>,
+    strings: Vec<Cow<'text, str>>,
 }
 
 #[derive(Debug, Default, Clone, Copy)]
@@ -170,6 +171,7 @@ fn is_binary_op(name: &str) -> bool {
 }
 
 fn next_token<'a>(i: &mut StringStream<'a>) -> Option<&'a str> {
+    // TODO: Construct tokens for non-word mutlichars like == and ||
     while i.peek()?.is_whitespace() {
         i.next();
     }
@@ -304,7 +306,6 @@ impl<'text> Parser<'text> {
 
     fn parse_expr(&mut self, i: &mut StringStream<'text>) -> Expression<'text> {
         let tok = next_token(i).unwrap();
-        // TODO: Parse floats
         let place = if tok.chars().nth(0).unwrap().is_numeric() {
             let mut num_string = String::from(tok);
             if let Some(Consumed::Expected) = consume_next_token_if(i, ".") {
@@ -860,6 +861,8 @@ impl<'text> Parser<'text> {
 
     fn parse_string(&mut self, i: &mut StringStream<'text>) -> StringAddress {
         let start = i.index();
+        let mut end = start;
+        let mut cow: Cow<'text, str> = Cow::Borrowed(&i.source[start..end]);
         loop {
             let c = i.next();
             if c.is_none() {
@@ -869,18 +872,29 @@ impl<'text> Parser<'text> {
             if c == '"' {
                 break;
             } else if c == '\\' {
-                let _escaped = i.next();
-                // TODO: Process escapes like \n etc.
+                let escaped = i.next().expect("Unexpected EOF after backslash in string literal");
+                let new_char = match escaped {
+                    'n' => '\n',
+                    // TODO: Other escapes
+                    _ => escaped
+                };
+                cow.to_mut().push(new_char);
+                end += 1;
+            }
+            end += 1;
+
+            // As long as there haven't been any escapes, this Cow can stay as a pointer into the
+            // source text
+            if let Cow::Borrowed(_) = cow {
+                cow = Cow::Borrowed(&i.source[start..end]);
             }
         }
-        let end = i.index() - 1;
 
-        let str = &i.source[start..end];
         //println!("Parsed string: {str:?}");
-        if let Some(index) = self.strings.iter().position(|s| s == &str) {
+        if let Some(index) = self.strings.iter().position(|s| s == &cow) {
             index
         } else {
-            self.strings.push(str);
+            self.strings.push(cow);
             self.strings.len() - 1
         }
         .try_into()
