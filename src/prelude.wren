@@ -9,7 +9,7 @@ class Object {
     ! { false }
 
     is(class) {
-
+		return this.type.subclass_of(class)
     }
 
     toString { "Object" }
@@ -17,6 +17,7 @@ class Object {
     type {
         return ;asm(this) {
             /* class */
+			0x1f
         }
     }
 }
@@ -25,10 +26,22 @@ class Class is Object {
     name {
         return ;asm(this) {
             /* read_field ClassStructure::Name */
+			0x03 0x02 0x00 0x00 0x00
         }
     }
 
-    supertype { ;asm(this) { /* read_field ClassStructure::Supertype */ } }
+	subclass_of(class) {
+		_Class_tmp_1 = this
+		while (_Class_tmp_1) {
+			if Object.same(_Class_tmp_1, class) {
+				return true
+			}
+			_Class_tmp_1 = _Class_tmp_1.supertype
+		}
+		return false
+	}
+
+    supertype { ;asm { 0x03 0x01 0x00 0x00 0x00 /* read_field ClassStructure::Supertype */ } }
 }
 
 /* Primitive classes */

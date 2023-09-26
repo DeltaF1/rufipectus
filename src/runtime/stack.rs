@@ -155,7 +155,6 @@ impl ExecutionContext {
             // Delete anything below the n args from the top of the stack
             let arg_start = vec.len() - n;
             vec.drain(stack.frame_start..arg_start);
-
         }
 
         // Tailcall, don't preserve the previous IP
