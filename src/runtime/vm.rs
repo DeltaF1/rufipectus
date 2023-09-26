@@ -3,7 +3,7 @@ use crate::bytecode::{NativeCall, Op};
 use crate::runtime;
 use crate::runtime::CodeAddress;
 use crate::runtime::SafeFloatToInt;
-use crate::runtime::Value;
+use crate::runtime::{PrimitiveValue, Value};
 use std::error::Error;
 
 pub fn run(
@@ -210,7 +210,17 @@ pub fn run(
                     NativeCall::Print => {
                         let s = ctx.stack.pop()?;
                         // TODO: Call toString
-                        println!("{}", s);
+                        match s {
+                            Value::Primitive(PrimitiveValue::String(ptr)) => {
+                                let bytes: &[u8] = unsafe {&*ptr};
+                                if let Ok(s) = std::str::from_utf8(bytes) {
+                                    println!("{}", s)
+                                } else {
+                                    println!("{:?}", bytes)
+                                }
+                            },
+                            _ => println!("{}", s)
+                        }
                     },
                     NativeCall::Unimplemented => panic!("Tried to execute an unimplemented built-in method. This binary may be out-of-date with the bytecode"),
                     NativeCall::UserDefined(_tag) => todo!("User-pluggable native functions")
