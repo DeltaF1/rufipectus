@@ -443,19 +443,23 @@ impl<'text> Parser<'text> {
             let op = next_token(i).unwrap();
             return Expression::Call(Box::new(place), self.parse_func_call(i, op));
         }
-        match peek_next_token(i) {
-            Some(".") => {
-                // Drop "."
-                next_token(i);
-                let method_name = next_token(i).unwrap();
-                match method_name {
-                    "{" | "}" => panic!("Bad char in method name"),
-                    _ => {}
-                };
-                Expression::Call(Box::new(place), self.parse_func_call(i, method_name))
+
+        let mut place = place;
+        loop {
+            match peek_next_token(i) {
+                Some(".") => {
+                    // Drop "."
+                    next_token(i);
+                    let method_name = next_token(i).unwrap();
+                    match method_name {
+                        "{" | "}" => panic!("Bad char in method name"),
+                        _ => {}
+                    };
+                    place = Expression::Call(Box::new(place), self.parse_func_call(i, method_name))
+                }
+                Some(_) => break place,
+                None => break place,
             }
-            Some(_) => place,
-            None => place,
         }
         /*
 
@@ -673,6 +677,8 @@ impl<'text> Parser<'text> {
             }
             assert_eq!(next_token(i), Some("}"));
             Statement::Block(v)
+        } else if let Some(Consumed::Expected) = consume_next_token_if(i, "}") {
+            Statement::Block(vec![])
         } else {
             let s = self.parse_statement(i, locals);
             assert_eq!(next_token(i), Some("}"));
