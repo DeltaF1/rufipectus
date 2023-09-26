@@ -90,6 +90,8 @@ fn bootstrap_class() -> (ObjectRef, ObjectRef, ObjectRef) {
         exact_repeat::exact_repeat(CLASS_NUM_FIELDS, Value::null()),
     );
 
+    object_meta.borrow_fields_mut()[ClassStructure::Supertype as usize] = class.clone().into();
+
     object.borrow_fields_mut()[ClassStructure::NumFields as usize] = 0f64.into();
     object.borrow_fields_mut()[ClassStructure::Name as usize] = "Object".into();
 
