@@ -791,7 +791,7 @@ impl<'text> Parser<'text> {
                             continue;
                         }
                         ")" => break,
-                        _ => panic!(),
+                        x => panic!("Unexpected token {x:?} in arg list for function call"),
                     }
                 }
                 assert_eq!(next_token(i), Some(")"));
@@ -940,11 +940,13 @@ impl<'text> Parser<'text> {
             if c == '"' {
                 break;
             } else if c == '\\' {
-                let escaped = i.next().expect("Unexpected EOF after backslash in string literal");
+                let escaped = i
+                    .next()
+                    .expect("Unexpected EOF after backslash in string literal");
                 let new_char = match escaped {
                     'n' => '\n',
                     // TODO: Other escapes
-                    _ => escaped
+                    _ => escaped,
                 };
                 cow.to_mut().push(new_char);
                 end += 1;
@@ -955,6 +957,8 @@ impl<'text> Parser<'text> {
             // source text
             if let Cow::Borrowed(_) = cow {
                 cow = Cow::Borrowed(&i.source[start..end]);
+            } else if c != '\\' {
+                cow.to_mut().push(c)
             }
         }
 
