@@ -1505,7 +1505,8 @@ impl<'a, 'text> PallBearer {
                 asm.emit_op(bytecode::Op::PopIntoGlobal(*n));
             }
             Statement::If(cond, body) => {
-                asm.with_section("if", |asm| {
+                let rand: u32 = rand::random();
+                asm.with_section(format!("if{rand}"), |asm| {
                     self.lower_expression(augur, asm, cond);
                     asm.emit_jump_if("then0".into());
 
