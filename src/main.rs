@@ -1191,6 +1191,22 @@ impl<'a, 'text> Augur<'a, 'text> {
             Expression::ArgLookup(n) => self
                 .types
                 .query(Query::MethodArg(self.current_method.clone().unwrap(), *n)),
+            Expression::Or(left, right) => {
+                let left = self.typecheck_expr(left);
+                match left.truthiness() {
+                    Some(true) => left,
+                    Some(false) => self.typecheck_expr(right),
+                    None => left | self.typecheck_expr(right),
+                }
+            }
+            Expression::And(left, right) => {
+                let left = self.typecheck_expr(left);
+                match left.truthiness() {
+                    Some(false) => left,
+                    Some(true) => self.typecheck_expr(right),
+                    None => left | self.typecheck_expr(right),
+                }
+            }
             Expression::Ternary(condition, then, r#else) => {
                 match self.typecheck_expr(condition).truthiness() {
                     Some(true) => self.typecheck_expr(then),
@@ -1680,6 +1696,30 @@ impl<'a, 'text> PallBearer {
             Expression::GlobalLookup(n) => asm.emit_op(bytecode::Op::PushGlobal(*n)),
             Expression::ArgLookup(n) => asm.emit_op(bytecode::Op::PushArg(*n)),
             Expression::LocalLookup(_) => todo!(),
+            Expression::Or(left, right) => {
+                let rand: u32 = rand::random();
+                asm.with_section(format!("or{}", rand), |asm| {
+                    self.lower_expression(augur, asm, left);
+                    asm.emit_op(bytecode::Op::Dup);
+                    asm.emit_jump_if("done".into());
+                    self.lower_expression(augur, asm, right);
+                    asm.label("done".into());
+                });
+            }
+            Expression::And(left, right) => {
+                let rand: u32 = rand::random();
+                asm.with_section(format!("and{}", rand), |asm| {
+                    self.lower_expression(augur, asm, left);
+                    asm.emit_op(bytecode::Op::Dup);
+                    asm.emit_jump_if("right".into());
+
+                    asm.emit_jump("done".into());
+
+                    asm.label("right".into());
+                    self.lower_expression(augur, asm, right);
+                    asm.label("done".into());
+                });
+            }
             Expression::Ternary(cond, left, right) => {
                 let rand: u32 = rand::random();
                 asm.with_section(format!("conditional{}", rand), |asm| {

@@ -89,6 +89,8 @@ pub enum Expression<'a> {
     GlobalLookup(usize),
     ArgLookup(usize),
     LocalLookup(usize),
+    Or(Box<Expression<'a>>, Box<Expression<'a>>),
+    And(Box<Expression<'a>>, Box<Expression<'a>>),
     Ternary(
         Box<Expression<'a>>,
         Box<Expression<'a>>,
@@ -129,7 +131,6 @@ pub fn missing_return(s: &Statement) -> bool {
         _ => true,
     }
 }
-
 
 #[derive(Debug, PartialEq)]
 pub enum AstSig<'a> {

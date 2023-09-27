@@ -166,7 +166,21 @@ fn is_word(c: &char) -> bool {
 fn is_binary_op(name: &str) -> bool {
     matches!(
         name,
-        "*" | "+" | "-" | "/" | ">>" | "<<" | "==" | "!=" | ">" | "<" | "<=" | ">=" | "&&" | "||" | "%" | "is"
+        "*" | "+"
+            | "-"
+            | "/"
+            | ">>"
+            | "<<"
+            | "=="
+            | "!="
+            | ">"
+            | "<"
+            | "<="
+            | ">="
+            | "&&"
+            | "||"
+            | "%"
+            | "is"
     )
 }
 
@@ -501,11 +515,6 @@ impl<'text> Parser<'text> {
         }
         */
 
-        if peek_next_token(i).is_some_and(is_binary_op) {
-            let op = next_token(i).unwrap();
-            return Expression::Call(Box::new(place), self.parse_func_call(i, op));
-        }
-
         let mut place = place;
         loop {
             match peek_next_token(i) {
@@ -526,7 +535,20 @@ impl<'text> Parser<'text> {
                     let right = self.parse_expr(i);
                     break Expression::Ternary(place.into(), left.into(), right.into());
                 }
-                Some(_) => break place,
+                Some(x) => {
+                    if is_binary_op(x) {
+                        let op = next_token(i).unwrap();
+                        let result = match op {
+                            "||" => Expression::Or(Box::new(place), Box::new(self.parse_expr(i))),
+                            "&&" => Expression::And(Box::new(place), Box::new(self.parse_expr(i))),
+                            _ => Expression::Call(Box::new(place), self.parse_func_call(i, op)),
+                        };
+                        place = result;
+                    } else {
+                        break place;
+                    }
+                }
+
                 None => break place,
             }
         }
