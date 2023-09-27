@@ -308,12 +308,25 @@ impl<'text> Parser<'text> {
         let tok = next_token(i).unwrap();
         let place = if tok.chars().nth(0).unwrap().is_numeric() {
             let mut num_string = String::from(tok);
-            if let Some(Consumed::Expected) = consume_next_token_if(i, ".") {
-                num_string += ".";
-                num_string += next_token(i).unwrap();
+            // Only parse a decimal value if the bit after the . is numeric. Otherwise this is a
+            // number literal with a method call
+            if let Some(".") = peek_next_token(i) {
+                if let Some(true) =
+                    peek_nth_token(i, 1).map(|s| s.chars().nth(0).unwrap().is_numeric())
+                {
+                    num_string += next_token(i).unwrap();
+                    num_string += next_token(i).unwrap();
+                }
             }
 
-            Expression::Primitive(Primitive::Number(num_string.parse::<f64>().unwrap().into()))
+            let f: f64 = if num_string.starts_with("0x") {
+                let int: i64 = i64::from_str_radix(&num_string[2..], 16).unwrap();
+                int as f64
+            } else {
+                num_string.parse().unwrap()
+            };
+
+            Expression::Primitive(Primitive::Number(f.into()))
         } else {
             match tok {
                 ";" => {

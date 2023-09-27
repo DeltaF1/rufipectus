@@ -38,8 +38,12 @@ pub enum NativeCall {
     NewObject = 0,
     Same,
     Multiply = 0x100,
+    Add,
+    Subtract,
+    Divide,
+    Negate,
 
-    Print,
+    Print = 0x200,
 
     /* ... */
     Unimplemented,

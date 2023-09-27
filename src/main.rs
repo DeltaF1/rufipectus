@@ -1032,8 +1032,8 @@ impl<'a, 'text> Augur<'a, 'text> {
                 Rc::clone(&self.classes[GlobalClassSlots::Bool as usize * 2]),
                 sig,
             ),
-            Type::KnownType(BroadType::Number) => CallTarget::Static(
-                Rc::clone(&self.classes[GlobalClassSlots::Num as usize * 2]),
+            Type::KnownType(BroadType::Number) => self.resolve_call_target(
+                &Type::KnownClass(Rc::clone(&self.classes[GlobalClassSlots::Num as usize * 2])),
                 sig,
             ),
             Type::KnownType(BroadType::String) => CallTarget::Static(

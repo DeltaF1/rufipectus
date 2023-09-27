@@ -211,6 +211,29 @@ pub fn run(
                         let c = a * b;
                         ctx.stack.push(c.into());
                     },
+                    NativeCall::Add => {
+                        let b: f64 = ctx.stack.pop()?.try_into()?;
+                        let a: f64 = ctx.stack.pop()?.try_into()?;
+                        let c = a + b;
+                        ctx.stack.push(c.into());
+                    },
+                    NativeCall::Subtract => {
+                        let b: f64 = ctx.stack.pop()?.try_into()?;
+                        let a: f64 = ctx.stack.pop()?.try_into()?;
+                        let c = a - b;
+                        ctx.stack.push(c.into());
+                    },
+                    NativeCall::Divide => {
+                        let b: f64 = ctx.stack.pop()?.try_into()?;
+                        let a: f64 = ctx.stack.pop()?.try_into()?;
+                        let c = a / b;
+                        ctx.stack.push(c.into());
+                    },
+                    NativeCall::Negate => {
+                        let a: f64 = ctx.stack.pop()?.try_into()?;
+                        let c = -a;
+                        ctx.stack.push(c.into());
+                    },
                     NativeCall::Print => {
                         let s = ctx.stack.pop()?;
                         // TODO: Call toString
