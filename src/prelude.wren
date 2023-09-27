@@ -6,6 +6,9 @@ class Object {
         }
     }
 
+	!=(other) { !(this == other) }
+	==(other) { Object.same(this, other) }
+
     ! { false }
 
     is(class) {

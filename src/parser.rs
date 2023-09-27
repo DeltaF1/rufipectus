@@ -164,10 +164,14 @@ fn is_word(c: &char) -> bool {
 }
 
 fn is_binary_op(name: &str) -> bool {
-    match name {
-        "*" | "+" | "-" | "/" | ">>" | "<<" | "==" | ">" | "<" | "<=" | ">=" | "%" | "is" => true,
-        _ => false,
-    }
+    matches!(
+        name,
+        "*" | "+" | "-" | "/" | ">>" | "<<" | "==" | "!=" | ">" | "<" | "<=" | ">=" | "&&" | "||" | "%" | "is"
+    )
+}
+
+fn is_unary_op(name: &str) -> bool {
+    matches!(name, "-" | "!" | "~")
 }
 
 fn next_token<'a>(i: &mut StringStream<'a>) -> Option<&'a str> {
@@ -186,6 +190,44 @@ fn next_token<'a>(i: &mut StringStream<'a>) -> Option<&'a str> {
             }
         }
     }
+    let end = i.index_maybe().unwrap_or(i.source.len());
+    let s = i.get(start, end);
+
+    fn consume_next_char_if(i: &mut StringStream, target: char) -> bool {
+        if let Some((_, c)) = i.iter.peek() {
+            if c == &target {
+                i.iter.next();
+                return true;
+            }
+        }
+        false
+    }
+    match s {
+        "=" => {
+            consume_next_char_if(i, '=');
+        }
+        "!" => {
+            consume_next_char_if(i, '=');
+        }
+        "&" => {
+            consume_next_char_if(i, '&');
+        }
+        "|" => {
+            consume_next_char_if(i, '|');
+        }
+        "<" => {
+            if consume_next_char_if(i, '=') {
+            } else if consume_next_char_if(i, '<') {
+            }
+        }
+        ">" => {
+            if consume_next_char_if(i, '=') {
+            } else if consume_next_char_if(i, '>') {
+            }
+        }
+        _ => {}
+    }
+
     let end = i.index_maybe().unwrap_or(i.source.len());
     let s = i.get(start, end);
 
@@ -420,6 +462,12 @@ impl<'text> Parser<'text> {
                     }
                 }
                 _ => {
+                    if is_unary_op(tok) {
+                        return Expression::Call(
+                            Box::new(self.parse_expr(i)),
+                            AstSig::Getter(tok.into()),
+                        );
+                    }
                     // TODO current_method.x()
                     if tok.starts_with('_') {
                         let class = self.current_class.as_mut().unwrap();
