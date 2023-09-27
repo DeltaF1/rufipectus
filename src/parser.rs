@@ -493,8 +493,8 @@ impl<'text> Parser<'text> {
                     {
                         Expression::ArgLookup(n)
                         // TODO: Lookup locals
-                    } else if let Some(n) = self.globals.get_index(tok) {
-                        Expression::GlobalLookup(n)
+                    } else if self.current_method.is_none() && self.globals.get_index(tok).is_some() {
+                        Expression::GlobalLookup(self.globals.get_index(tok).unwrap())
                     } else if tok.chars().nth(0).unwrap().is_uppercase() {
                         Expression::GlobalLookup(
                             self.globals
@@ -574,6 +574,7 @@ impl<'text> Parser<'text> {
         _locals: &mut Scope<'text>,
     ) -> Statement<'text> {
         match next_token(i).expect("EOF when parsing statement") {
+            "foreign" => todo!("Foreign class defs"),
             "class" => {
                 let name = next_token(i).expect("EOF when parsing class name");
                 let class_builder;
