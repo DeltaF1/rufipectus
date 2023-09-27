@@ -100,10 +100,11 @@ class Fn {}
 class Fiber {}
 class System {
 	static print(s) {
-		;asm(s) {
+		return ;asm(s) {
 			/* native Print */
 			0x22 0x00 0x02 0x00 0x00
+			/* push arg 0 */
+			0x05 0x00 0x00 0x00 0x00
 		}
-		return s
 	}
 }
