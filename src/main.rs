@@ -188,6 +188,8 @@ impl<'text> BitOr<Type<'text>> for Type<'text> {
             (Type::KnownPrimitive(p1), Type::KnownPrimitive(p2)) => {
                 if p1 == p2 {
                     Type::KnownPrimitive(p1)
+                } else if p1 == Primitive::Null || p2 == Primitive::Null {
+                    Type::Unknown
                 } else if Into::<BroadType>::into(&p1) == (&p2).into() {
                     Type::KnownType((&p1).into())
                 } else {
@@ -1027,26 +1029,26 @@ impl<'a, 'text> Augur<'a, 'text> {
     ) -> CallTarget<'text> {
         match typ {
             Type::Unknown | Type::KnownType(BroadType::Object) => CallTarget::Dynamic(sig),
-            Type::KnownType(BroadType::Bool) => CallTarget::Static(
-                // FIXME: This is jank esp. with the * 2
-                Rc::clone(&self.classes[GlobalClassSlots::Bool as usize * 2]),
+            // FIXME: This is jank esp. with the * 2
+            Type::KnownType(BroadType::Bool) => self.resolve_call_target(
+                &Type::KnownClass(Rc::clone(&self.classes[GlobalClassSlots::Bool as usize * 2])),
                 sig,
             ),
             Type::KnownType(BroadType::Number) => self.resolve_call_target(
                 &Type::KnownClass(Rc::clone(&self.classes[GlobalClassSlots::Num as usize * 2])),
                 sig,
             ),
-            Type::KnownType(BroadType::String) => CallTarget::Static(
-                Rc::clone(&self.classes[GlobalClassSlots::String as usize]),
+            Type::KnownType(BroadType::String) => self.resolve_call_target(
+                &Type::KnownClass(Rc::clone(&self.classes[GlobalClassSlots::String as usize * 2])),
                 sig,
             ),
-            Type::KnownType(BroadType::Range) => CallTarget::Static(
-                Rc::clone(&self.classes[GlobalClassSlots::Range as usize]),
+            Type::KnownType(BroadType::Range) => self.resolve_call_target(
+                &Type::KnownClass(Rc::clone(&self.classes[GlobalClassSlots::Range as usize * 2])),
                 sig,
             ),
             Type::KnownPrimitive(p) => match p {
-                ast::Primitive::Null => CallTarget::Static(
-                    Rc::clone(&self.classes[GlobalClassSlots::Null as usize]),
+                ast::Primitive::Null => self.resolve_call_target(
+                    &Type::KnownClass(Rc::clone(&self.classes[GlobalClassSlots::Null as usize * 2])),
                     sig,
                 ),
                 _ => {
