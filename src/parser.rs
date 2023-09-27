@@ -747,8 +747,7 @@ impl<'text> Parser<'text> {
             if let Consumed::Expected = consume_next_token_if(i, "if").unwrap() {
                 todo!("elseif chain")
             } else {
-                assert_eq!(next_token(i), Some("{"));
-                let r#else = self.parse_block(i, _locals);
+                let r#else = self.parse_statement(i, _locals);
                 IfBody::ThenElse {
                     then: Box::new(body),
                     r#else: Box::new(r#else),
