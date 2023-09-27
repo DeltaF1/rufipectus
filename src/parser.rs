@@ -1,10 +1,10 @@
 use std::cell::RefCell;
 use std::collections::HashMap;
 
+use std::borrow::Cow;
 use std::io::Read;
 use std::iter::Peekable;
 use std::rc::Rc;
-use std::borrow::Cow;
 
 use crate::ast::Primitive;
 use crate::common::StringAddress;
@@ -470,6 +470,13 @@ impl<'text> Parser<'text> {
                         _ => {}
                     };
                     place = Expression::Call(Box::new(place), self.parse_func_call(i, method_name))
+                }
+                Some("?") => {
+                    assert_eq!(next_token(i), Some("?"));
+                    let left = self.parse_expr(i);
+                    assert_eq!(next_token(i), Some(":"));
+                    let right = self.parse_expr(i);
+                    break Expression::Ternary(place.into(), left.into(), right.into());
                 }
                 Some(_) => break place,
                 None => break place,

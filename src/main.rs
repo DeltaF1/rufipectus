@@ -1680,7 +1680,25 @@ impl<'a, 'text> PallBearer {
             Expression::GlobalLookup(n) => asm.emit_op(bytecode::Op::PushGlobal(*n)),
             Expression::ArgLookup(n) => asm.emit_op(bytecode::Op::PushArg(*n)),
             Expression::LocalLookup(_) => todo!(),
-            Expression::Ternary(_, _, _) => todo!(),
+            Expression::Ternary(cond, left, right) => {
+                let rand: u32 = rand::random();
+                asm.with_section(format!("conditional{}", rand), |asm| {
+                    self.lower_expression(augur, asm, cond);
+                    asm.emit_jump_if("left".into());
+
+                    asm.with_section("right", |asm| {
+                        self.lower_expression(augur, asm, right);
+                    });
+
+                    asm.emit_jump("done".into());
+
+                    asm.with_section("left", |asm| {
+                        self.lower_expression(augur, asm, left);
+                    });
+
+                    asm.label("done".into());
+                });
+            }
             Expression::Primitive(p) => {
                 let p = match p {
                     ast::Primitive::Bool(b) => bytecode::Primitive::Boolean(*b),
