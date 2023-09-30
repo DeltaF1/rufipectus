@@ -688,6 +688,13 @@ impl<'text> Scope<'text> {
         }
     }
 
+    fn get_or_declare(&mut self, name: &'text str) -> usize {
+        match self.get_index(name) {
+            Some(n) => n,
+            None => self.declare(name),
+        }
+    }
+
     fn declare(&mut self, name: &'text str) -> usize {
         if self.names.contains(&name) {
             panic!("Name {name} already exists in scope")
