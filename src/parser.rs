@@ -833,19 +833,37 @@ impl<'text> Parser<'text> {
         let mut arity;
 
         if name == "[" {
-            arity = Arity::SubscriptGetter(self.parse_args_list(i));
+            let parsed_args = Parser::parse_args_list(i, "]");
+            let args = &mut self.current_method.as_mut().unwrap().args;
+            for parsed in &parsed_args {
+                args.declare(parsed);
+            }
+            arity = Arity::SubscriptGetter(parsed_args.len());
             assert_eq!(next_token(i), Some("]"))
         } else if next_token_is(i, "(").unwrap() {
-            arity = Arity::Func(self.parse_args_list(i));
+            let parsed_args = Parser::parse_args_list(i, ")");
+            let args = &mut self.current_method.as_mut().unwrap().args;
+            for parsed in &parsed_args {
+                args.declare(parsed);
+            }
+            arity = Arity::Func(parsed_args.len());
             assert_eq!(next_token(i), Some(")"));
         } else {
             arity = Arity::Getter
         }
 
         if next_token_is(i, "=").unwrap() {
-            next_token(i);
-            let _setter_arg = next_token(i).unwrap();
-            //self.current_method.args.declare(setter_arg)
+            assert_eq!(next_token(i), Some("("));
+            let args = Parser::parse_args_list(i, ")");
+            assert_eq!(next_token(i), Some(")"));
+            assert_eq!(args.len(), 1, "Only one value can be set by a setter");
+            for setter_arg in args {
+                self.current_method
+                    .as_mut()
+                    .unwrap()
+                    .args
+                    .declare(setter_arg);
+            }
             arity = match arity {
                 Arity::Getter => Arity::Setter,
                 Arity::SubscriptGetter(n) => Arity::SubscriptSetter(n),
@@ -856,30 +874,29 @@ impl<'text> Parser<'text> {
         Signature::new(name.into(), arity)
     }
 
-    fn parse_args_list(&mut self, i: &mut StringStream<'text>) -> usize {
-        let args = &mut self.current_method.as_mut().unwrap().args;
-
+    fn parse_args_list(i: &mut StringStream<'text>, closing: &str) -> Vec<&'text str> {
+        let mut args = vec![];
         loop {
-            match peek_next_token(i).unwrap() {
-                "," => panic!("Too many commas"),
-                "]" => break,
-                ")" => break,
-                _ => {}
+            let next = peek_next_token(i).unwrap();
+            if next == "," {
+                panic!("Too many commas")
+            } else if next == closing {
+                break;
             }
             let name = next_token(i).expect("EOF when parsing parameter list");
-            args.declare(name);
-            match peek_next_token(i).unwrap() {
-                "," => {
-                    next_token(i);
-                    continue;
-                }
-                "]" => break,
-                ")" => break,
-                _x => panic!("Malformed list"),
+            args.push(name);
+            let next = peek_next_token(i).unwrap();
+            if next == "," {
+                next_token(i);
+                continue;
+            } else if next == closing {
+                break;
+            } else {
+                panic!("Malformed list");
             }
         }
 
-        args.len()
+        args
     }
 
     fn parse_class_body(&mut self, i: &mut StringStream<'text>) -> Rc<ClassDef<'text>> {
@@ -975,7 +992,7 @@ impl<'text> Parser<'text> {
             }
         }
 
-        //println!("Parsed string: {str:?}");
+        //println!("Parsed string: {cow:?}");
         if let Some(index) = self.strings.iter().position(|s| s == &cow) {
             index
         } else {
