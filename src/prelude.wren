@@ -54,7 +54,7 @@ class Class is Object {
 /* Primitive classes */
 class Bool {
     ! {
-        if this {
+        if (this) {
             return false
         } else {
             return true
@@ -62,7 +62,7 @@ class Bool {
     }
 
     toString {
-        if this {
+        if (this) {
             return "true"
         } else {
             return "false"

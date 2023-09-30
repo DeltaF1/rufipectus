@@ -731,6 +731,7 @@ impl<'text> Parser<'text> {
         _locals: &mut Scope<'text>,
     ) -> Statement<'text> {
         use crate::ast::IfBody;
+        assert_eq!(peek_next_token(i), Some("("));
         let cond = self.parse_expr(i);
         let body = self.parse_statement(i, _locals);
         let if_body = if let Some(Consumed::Expected) = consume_next_token_if(i, "else") {
