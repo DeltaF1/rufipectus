@@ -20,14 +20,16 @@ pub fn run(
             Some(op) => op,
             None => return ctx.stack.pop().or_else(|_| Ok(Value::null())),
         };
-        /*println!(
+        /*
+        println!(
             "({})[{}] {:?}",
             symbols
                 .map(|s| -> &str { &s.labels[ctx.ip as usize] })
                 .unwrap_or("???"),
             ctx.ip,
             &op
-        );*/
+        );
+        */
         ctx.ip += TryInto::<CodeAddress>::try_into(op.len()).unwrap();
         match op {
             Op::Dup => {
