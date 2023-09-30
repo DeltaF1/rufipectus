@@ -34,7 +34,8 @@ fn bootstrap_class() -> (ObjectRef, ObjectRef, ObjectRef) {
             name,
             methods,
         */
-        4;
+        // +1 for Class._tmp_1 FIXME: Remove this once locals are implemented
+        5;
 
     let maybe: Rc<_> = SliceWithHeader::new::<Rc<DSTRefCellInner<MaybeUninit<ObjectRef>, Value>>, _>(
         AdjacentRefCell {

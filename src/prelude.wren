@@ -32,14 +32,18 @@ class Class is Object {
 			0x03 0x02 0x00 0x00 0x00
         }
     }
+	
+	tmp_1=(x) { _tmp_1 = x }
+	tmp_1 { _tmp_1 }
+	
 
 	subclass_of(class) {
-		_Class_tmp_1 = this
-		while (_Class_tmp_1) {
-			if Object.same(_Class_tmp_1, class) {
+		Class.tmp_1 = this
+		while (Class.tmp_1) {
+			if (Object.same(Class.tmp_1, class)) {
 				return true
 			}
-			_Class_tmp_1 = _Class_tmp_1.supertype
+			Class.tmp_1 = Class.tmp_1.supertype
 		}
 		return false
 	}
