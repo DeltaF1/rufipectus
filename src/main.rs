@@ -570,7 +570,6 @@ impl<'a> ClassBuilder<'a> {
             arity: sig.arity,
         };
 
-        assert!(sig.arity.arity() <= 2);
         let mut args = vec![];
         for n in 0..sig.arity.arity() {
             args.push(Expression::ArgLookup(n));
