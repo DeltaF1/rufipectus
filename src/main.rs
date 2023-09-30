@@ -536,10 +536,10 @@ impl<'a> ClassBuilder<'a> {
         self.fields.write_use(name) + self.class.num_parent_fields()
     }
 
-    pub fn read_field(&mut self, name: &'a str) -> usize {
+    pub fn read_field<S: Into<Cow<'a, str>>>(&mut self, name: S) -> usize {
         let name = name.into();
-        self.check_shadowed_field(name);
-        self.fields.read_use(name.into()) + self.class.num_parent_fields()
+        self.check_shadowed_field(&name);
+        self.fields.read_use(name) + self.class.num_parent_fields()
     }
 
     fn check_shadowed_field(&self, name: &str) {
