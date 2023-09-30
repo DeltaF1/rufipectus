@@ -100,7 +100,37 @@ class Sequence {}
 class Range is Sequence {}
 class List is Sequence {}
 class Map is Sequence {}
-class Fn {}
+
+class Fn {
+	static new(f) {
+		if (!(f is Fn)) {
+			// TODO: error "Argument must be function"
+		}
+		return f
+	}
+}
+
+/*
+var c = ...
+var f = Fn.new {|a, b|
+	do some shit with a, b,
+	and closed value c
+}
+
+->
+
+Class 'Closure {random_id}' is Fn {
+	new(c) {
+		_0 = c
+	}
+
+	call(a,b) {
+		do some shit with a,b
+		and _0
+	}
+}
+*/
+
 class Fiber {}
 class System {
 	static print(s) {

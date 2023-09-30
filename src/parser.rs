@@ -2,7 +2,6 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 
 use std::borrow::Cow;
-use std::io::Read;
 use std::iter::Peekable;
 use std::rc::Rc;
 
@@ -108,6 +107,7 @@ impl<'text> StringStream<'text> {
 pub struct Parser<'text> {
     current_class: Option<ClassBuilder<'text>>,
     current_method: Option<MethodContext<'text>>,
+    function_contexts: Vec<FunctionContext<'text>>,
     global_classes: HashMap<&'text str, Rc<ClassDef<'text>>>,
     classes: Vec<Rc<ClassDef<'text>>>,
     globals: Scope<'text>,
@@ -121,6 +121,13 @@ enum MethodType {
     Foreign,
     #[default]
     Normal,
+}
+
+#[derive(Default, Debug)]
+struct FunctionContext<'text> {
+    locals: Scope<'text>,
+    args: Scope<'text>,
+    closed_names: Scope<'text>,
 }
 
 #[derive(Default, Debug)]
@@ -333,9 +340,83 @@ fn consume_next_token_if<'text>(
     }
 }
 
+enum ReadNameType<'text> {
+    Lookup(Expression<'text>),
+    ThisCall,
+}
+
+impl<'text> ReadNameType<'text> {
+    fn unwrap(self) -> Expression<'text> {
+        match self {
+            ReadNameType::Lookup(e) => e,
+            ReadNameType::ThisCall => panic!("Tried to unwrap ThisCall as a lookup"),
+        }
+    }
+}
+
 impl<'text> Parser<'text> {
     pub fn new() -> Self {
         Default::default()
+    }
+
+    fn read_name(&mut self, name: &'text str) -> ReadNameType<'text> {
+        if !self.function_contexts.is_empty() {
+            let current = self.function_contexts.last_mut().unwrap();
+            if let Some(n) = current.args.get_index(name) {
+                return ReadNameType::Lookup(Expression::ArgLookup(n));
+            } else if let Some(n) = current.locals.get_index(name) {
+                todo!("locals")
+            } else {
+                if let Some(n) = current.closed_names.get_index(name) {
+                    ReadNameType::Lookup(Expression::ReadField(n))
+                } else {
+                    let current = self.function_contexts.pop().unwrap();
+                    // Recurse down the function call stack
+                    let lookup_type = self.read_name(name);
+                    self.function_contexts.push(current);
+                    let current = self.function_contexts.last_mut().unwrap();
+
+                    match lookup_type {
+                        ReadNameType::Lookup(Expression::GlobalLookup(_)) => return lookup_type,
+                        ReadNameType::Lookup(l) => {
+                            let n = current.closed_names.get_or_declare(name);
+                            return ReadNameType::Lookup(Expression::ReadField(n));
+                        }
+                        ReadNameType::ThisCall => {
+                            current.closed_names.get_or_declare("this");
+                            return ReadNameType::ThisCall;
+                        }
+                    }
+                }
+            }
+        } else if let Some(meth) = self.current_method.as_ref() {
+            if name == "this" {
+                return ReadNameType::Lookup(Expression::This);
+            }
+
+            if name.starts_with("__") {
+                let class = self.current_class.as_mut().unwrap();
+                return ReadNameType::Lookup(Expression::ReadStatic(class.read_static_field(name)));
+            } else if name.starts_with("_") {
+                // TODO: Assert that current_method.typ != Static
+                let class = self.current_class.as_mut().unwrap();
+                return ReadNameType::Lookup(Expression::ReadField(class.read_field(name)));
+            // TODO: locals
+            } else if let Some(n) = meth.args.get_index(name) {
+                return ReadNameType::Lookup(Expression::ArgLookup(n));
+            } else if name.chars().nth(0).unwrap().is_uppercase() {
+                return ReadNameType::Lookup(Expression::GlobalLookup(
+                    self.globals.get_index(name).unwrap(),
+                ));
+            } else {
+                ReadNameType::ThisCall
+            }
+        } else {
+            // TODO: top-level locals
+            return ReadNameType::Lookup(Expression::GlobalLookup(
+                self.globals.get_index(name).unwrap(),
+            ));
+        }
     }
 
     pub fn feed_text(&mut self, text: &'text str) -> Vec<Statement<'text>> {
@@ -440,7 +521,7 @@ impl<'text> Parser<'text> {
                     assert_eq!(next_token(i), Some(")"));
                     e
                 }
-                "this" => Expression::This,
+                "this" => self.read_name("this").unwrap(),
                 "false" => Expression::Primitive(Primitive::Bool(false)),
                 "true" => Expression::Primitive(Primitive::Bool(true)),
                 "null" => Expression::Primitive(Primitive::Null),
@@ -472,6 +553,15 @@ impl<'text> Parser<'text> {
                             AstSig::Getter(tok.into()),
                         );
                     }
+
+                    match self.read_name(tok) {
+                        ReadNameType::Lookup(e) => e,
+                        ReadNameType::ThisCall => Expression::Call(
+                            Box::new(self.read_name("this").unwrap()),
+                            self.parse_func_call(i, tok),
+                        ),
+                    }
+                    /*
                     // TODO current_method.x()
                     if tok.starts_with('_') {
                         let class = self.current_class.as_mut().unwrap();
@@ -483,9 +573,12 @@ impl<'text> Parser<'text> {
                     {
                         Expression::ArgLookup(n)
                         // TODO: Lookup locals
-                    } else if self.current_method.is_none() && self.globals.get_index(tok).is_some() {
+                    } else if self.current_method.is_none() && self.globals.get_index(tok).is_some()
+                    {
                         Expression::GlobalLookup(self.globals.get_index(tok).unwrap())
                     } else if tok.chars().nth(0).unwrap().is_uppercase() {
+                        // TODO: Globals can be forward declared. Change Scope to
+                        // InitializedOrderedSet for globals
                         Expression::GlobalLookup(
                             self.globals
                                 .get_index(tok)
@@ -493,8 +586,8 @@ impl<'text> Parser<'text> {
                         )
                     } else {
                         assert_ne!(tok, "super");
-                        Expression::Call(Box::new(Expression::This), self.parse_func_call(i, tok))
                     }
+                    */
                 }
             }
         };
@@ -662,6 +755,7 @@ impl<'text> Parser<'text> {
             }
             x => {
                 let assignment = next_token_is(i, "=").unwrap();
+                // TODO: use read_name/write_name
                 if let Some(class) = self.current_class.as_mut() {
                     if x.starts_with("__") {
                         if assignment {
@@ -706,7 +800,13 @@ impl<'text> Parser<'text> {
                         i.rollback(x.len());
                         Statement::ExprStatement(self.parse_expr(i))
                     }
-                    Some(NameType::Arg) => unimplemented!("Using arg in statement mode"),
+                    Some(NameType::Arg) => {
+                        if assignment {
+                            todo!("Can args be assigned to?")
+                        }
+                        i.rollback(x.len());
+                        Statement::ExprStatement(self.parse_expr(i))
+                    }
                     None => {
                         // We're in highest scope
                         // if locals.contains(x)
@@ -808,9 +908,17 @@ impl<'text> Parser<'text> {
                     }
                 }
                 assert_eq!(next_token(i), Some(")"));
+                // TODO: newlines
+                if !i.newline_before_next_token() {
+                    if let Some(Consumed::Expected) = consume_next_token_if(i, "{") {
+                        let func = self.parse_closure(i);
+                        args.push(func);
+                    }
+                }
                 return AstSig::Func(name, args);
             } else if let Some(Consumed::Expected) = consume_next_token_if(i, "{") {
-                todo!("Function body arguments")
+                let func = self.parse_closure(i);
+                return AstSig::Func(name.into(), vec![func]);
             } else {
                 intermediate = AstSig::Getter(name.into())
             }
@@ -825,6 +933,102 @@ impl<'text> Parser<'text> {
         }
 
         return intermediate;
+    }
+
+    fn parse_closure(&mut self, i: &mut StringStream<'text>) -> Expression<'text> {
+        let args = if let Consumed::Expected = consume_next_token_if(i, "|").unwrap() {
+            let args = Parser::parse_args_list(i, "|");
+            assert_eq!(next_token(i), Some("|"));
+            let mut scope = Scope::new();
+            for arg in args {
+                scope.declare(arg);
+            }
+            scope
+        } else {
+            Scope::new()
+        };
+
+        let rand: u32 = rand::random();
+        let mut closure_class =
+            ClassDef::child_of(&self.global_classes["Fn"], format!("Closure {rand}"));
+        let function_context = FunctionContext {
+            args,
+            ..Default::default()
+        };
+
+        self.function_contexts.push(function_context);
+        let body = self.parse_block(i, &mut Scope::new());
+        let function_context = self.function_contexts.pop().unwrap();
+        closure_class.add_method(
+            Signature::func("call", function_context.args.len()),
+            MethodAst { ast: body },
+        );
+        closure_class.add_method(
+            Signature::getter("arity"),
+            MethodAst {
+                ast: Statement::Return(Expression::Primitive(Primitive::Number(
+                    function_context.args.len() as f64,
+                ))),
+            },
+        );
+        let mut closure_loaders = vec![];
+        for closed_name in function_context.closed_names.names {
+            closure_loaders.push(match self.read_name(closed_name) {
+                ReadNameType::Lookup(e) => e,
+                ReadNameType::ThisCall => {
+                    panic!("ThisCall was accidentally added to closed_names set")
+                }
+            })
+        }
+
+        {
+            let mut setters = vec![];
+            for i in 0..closure_loaders.len() {
+                // _0 = arg0
+                setters.push(Statement::WriteField(
+                    // Unnamable field
+                    closure_class.write_field(format!("_ {i}")),
+                    Box::new(Expression::ArgLookup(i)),
+                ));
+                // Call read_field as well in case we warn on un-read fields in the future
+                // Anything that ends up in the closure set must have been read and/or written
+                // anyway so it's fine
+                closure_class.read_field(format!("_ {i}"));
+            }
+            let block = Statement::Block(setters);
+            closure_class.add_constructor(
+                Signature::func("new", closure_loaders.len()),
+                MethodAst { ast: block },
+            );
+        }
+
+        let class_class = self.global_classes.get("Class").map(Rc::clone);
+        let closure_class = closure_class.finish(class_class);
+        self.classes.push(Rc::clone(&closure_class));
+        self.classes
+            // SAFETY: Metaclass is never written to
+            // Furthermore, this reference is immediately cloned
+            .push(
+                unsafe { closure_class.get_meta_class() }
+                    .map(Rc::clone)
+                    .unwrap(),
+            );
+
+        Expression::Call(
+            Box::new(Expression::ClassBody(
+                ClassRef(closure_class),
+                crate::GlobalClassSlots::Fn as usize,
+            )),
+            AstSig::Func("new".into(), closure_loaders),
+        )
+        //
+        // or to save on class objects
+        //
+        // let slot = globals.declare(closure_class.name);
+        // global_classes.add(closure_class.finish());
+        // ??? top_level_ast.push(ClassBody(closure_class.finish(), global_classes.index_of("Fn")))
+        // Expression::Call(PushGlobal(globals.get_index(closure_class.name)), "new",
+        // closure_loaders)
     }
 
     fn parse_sig(&mut self, i: &mut StringStream<'text>) -> Signature<'text> {
