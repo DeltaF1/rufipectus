@@ -196,6 +196,11 @@ impl<'text> BitOr<Type<'text>> for Type<'text> {
                     Type::Unknown
                 }
             }
+            (Type::KnownPrimitive(Primitive::Null), _) => Type::Unknown,
+            (Type::KnownPrimitive(_), _) => {
+                // TODO: Better analysis here
+                Type::Unknown
+            }
             (Type::KnownClassOrSubtype(c1), Type::KnownClass(c2))
             | (Type::KnownClassOrSubtype(c1), Type::KnownClassOrSubtype(c2)) => {
                 if Rc::ptr_eq(&c1, &c2) {
@@ -1040,7 +1045,9 @@ impl<'a, 'text> Augur<'a, 'text> {
             Type::Unknown | Type::KnownType(BroadType::Object) => CallTarget::Dynamic(sig),
             // FIXME: This is jank esp. with the * 2
             Type::KnownType(BroadType::Bool) => self.resolve_call_target(
-                &Type::KnownClass(Rc::clone(&self.classes[GlobalClassSlots::Bool as usize * 2])),
+                &Type::KnownClass(Rc::clone(
+                    &self.classes[GlobalClassSlots::Bool as usize * 2],
+                )),
                 sig,
             ),
             Type::KnownType(BroadType::Number) => self.resolve_call_target(
@@ -1048,16 +1055,22 @@ impl<'a, 'text> Augur<'a, 'text> {
                 sig,
             ),
             Type::KnownType(BroadType::String) => self.resolve_call_target(
-                &Type::KnownClass(Rc::clone(&self.classes[GlobalClassSlots::String as usize * 2])),
+                &Type::KnownClass(Rc::clone(
+                    &self.classes[GlobalClassSlots::String as usize * 2],
+                )),
                 sig,
             ),
             Type::KnownType(BroadType::Range) => self.resolve_call_target(
-                &Type::KnownClass(Rc::clone(&self.classes[GlobalClassSlots::Range as usize * 2])),
+                &Type::KnownClass(Rc::clone(
+                    &self.classes[GlobalClassSlots::Range as usize * 2],
+                )),
                 sig,
             ),
             Type::KnownPrimitive(p) => match p {
                 ast::Primitive::Null => self.resolve_call_target(
-                    &Type::KnownClass(Rc::clone(&self.classes[GlobalClassSlots::Null as usize * 2])),
+                    &Type::KnownClass(Rc::clone(
+                        &self.classes[GlobalClassSlots::Null as usize * 2],
+                    )),
                     sig,
                 ),
                 _ => {
@@ -1079,6 +1092,8 @@ impl<'a, 'text> Augur<'a, 'text> {
                 if let Some(target) = ClassDef::find_class_with_method(&class, &sig) {
                     CallTarget::Static(target, sig)
                 } else {
+                    // TODO: This gives false positives when typechecking isn't over yet
+                    // Only assert this after typechecking is finished
                     panic!("{0} does not implement '{sig}'", class.name)
                 }
             }
@@ -1874,7 +1889,6 @@ fn main() {
 
     let mut parser = parser::Parser::new();
     let mut prelude_ast = parser.feed_text(&prelude);
-
     // Perform surgery on this AST to remove the initialization code for Object and Class.
     // These will be sitting in their slots at the start of runtime already thanks to
     // runtime::warmup()
@@ -1883,9 +1897,7 @@ fn main() {
     let mut main_ast = parser.feed_text(&s);
     let mut top_level_ast = prelude_ast;
     top_level_ast.append(&mut main_ast);
-
     let mut parsed = Module::from_parser(parser, Statement::Block(top_level_ast));
-
     if let Statement::Block(ref mut v) = &mut parsed.top_level_ast {
         use bytecode::{Op, Primitive};
         use runtime::ClassStructure;
