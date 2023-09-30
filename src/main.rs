@@ -58,10 +58,10 @@ where
 
 impl<T> InitializedOrderedSet<T>
 where
-    T: std::cmp::Eq + std::hash::Hash + Copy,
+    T: std::cmp::Eq + std::hash::Hash + Clone,
 {
     pub fn write_use(&mut self, item: T) -> usize {
-        self.written_items.insert(item);
+        self.written_items.insert(item.clone());
         self.get_or_insert(item)
     }
 }
@@ -321,8 +321,8 @@ impl std::fmt::Display for Arity {
 struct ClassBuilder<'a> {
     class: ClassDef<'a>,
     meta_class: ClassDef<'a>,
-    fields: InitializedOrderedSet<&'a str>,
-    static_fields: InitializedOrderedSet<&'a str>,
+    fields: InitializedOrderedSet<Cow<'a, str>>,
+    static_fields: InitializedOrderedSet<Cow<'a, str>>,
 }
 
 #[derive(Debug)]
@@ -335,7 +335,7 @@ struct ClassDef<'text> {
     name: Cow<'text, str>,
     parent: UnsafeCell<Option<Rc<ClassDef<'text>>>>,
     metaclass: UnsafeCell<Option<Rc<ClassDef<'text>>>>,
-    fields: Vec<&'text str>,
+    fields: Vec<Cow<'text, str>>,
     methods: HashMap<Signature<'text>, MethodAst<'text>>,
 
     // Metaclass only fields
@@ -399,10 +399,11 @@ impl<'a> ClassDef<'a> {
         false
     }
 
-    pub fn child_of(parent: &Rc<ClassDef<'a>>, name: &'a str) -> ClassBuilder<'a> {
+    pub fn child_of<S: Into<Cow<'a, str>>>(parent: &Rc<ClassDef<'a>>, name: S) -> ClassBuilder<'a> {
+        let name = name.into();
         let mut builder = ClassBuilder {
             class: ClassDef {
-                name: name.into(),
+                name: name.clone(),
                 parent: Some(parent.clone()).into(),
                 ..Default::default()
             },
@@ -529,14 +530,16 @@ impl<'a> ClassBuilder<'a> {
         builder
     }
 
-    pub fn write_field(&mut self, name: &'a str) -> usize {
-        self.check_shadowed_field(name);
+    pub fn write_field<S: Into<Cow<'a, str>>>(&mut self, name: S) -> usize {
+        let name = name.into();
+        self.check_shadowed_field(&name);
         self.fields.write_use(name) + self.class.num_parent_fields()
     }
 
     pub fn read_field(&mut self, name: &'a str) -> usize {
+        let name = name.into();
         self.check_shadowed_field(name);
-        self.fields.read_use(name) + self.class.num_parent_fields()
+        self.fields.read_use(name.into()) + self.class.num_parent_fields()
     }
 
     fn check_shadowed_field(&self, name: &str) {
@@ -550,11 +553,11 @@ impl<'a> ClassBuilder<'a> {
     }
 
     pub fn write_static_field(&mut self, name: &'a str) -> usize {
-        self.static_fields.write_use(name)
+        self.static_fields.write_use(name.into())
     }
 
     pub fn read_static_field(&mut self, name: &'a str) -> usize {
-        self.static_fields.read_use(name)
+        self.static_fields.read_use(name.into())
     }
 
     pub fn add_constructor(
