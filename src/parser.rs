@@ -166,23 +166,25 @@ fn is_word(c: &char) -> bool {
 fn is_binary_op(name: &str) -> bool {
     matches!(
         name,
-        "*" | "+"
+        "*" | "/"
+            | "%"
+            | "+"
             | "-"
-            | "/"
-            | ">>"
+            | ".."
+            | "..."
             | "<<"
-            | "=="
-            | "!="
-            | ">"
+            | ">>"
             | "<"
             | "<="
+            | ">"
             | ">="
+            | "=="
+            | "!="
             | "&&"
             | "||"
-            | "|"
             | "&"
             | "^"
-            | "%"
+            | "|"
             | "is"
     )
 }
@@ -219,31 +221,16 @@ fn next_token<'a>(i: &mut StringStream<'a>) -> Option<&'a str> {
         }
         false
     }
-    match s {
-        "=" => {
-            consume_next_char_if(i, '=');
-        }
-        "!" => {
-            consume_next_char_if(i, '=');
-        }
-        "&" => {
-            consume_next_char_if(i, '&');
-        }
-        "|" => {
-            consume_next_char_if(i, '|');
-        }
-        "<" => {
-            if consume_next_char_if(i, '=') {
-            } else if consume_next_char_if(i, '<') {
-            }
-        }
-        ">" => {
-            if consume_next_char_if(i, '=') {
-            } else if consume_next_char_if(i, '>') {
-            }
-        }
-        _ => {}
-    }
+    let _bin_op = match s {
+        "=" => consume_next_char_if(i, '='),
+        "!" => consume_next_char_if(i, '='),
+        "&" => consume_next_char_if(i, '&'),
+        "|" => consume_next_char_if(i, '|'),
+        "<" => consume_next_char_if(i, '=') || consume_next_char_if(i, '<'),
+        ">" => consume_next_char_if(i, '=') || consume_next_char_if(i, '>'),
+        "." => consume_next_char_if(i, '.') && consume_next_char_if(i, '.'),
+        _ => false,
+    };
 
     let end = i.index_maybe().unwrap_or(i.source.len());
     let s = i.get(start, end);
